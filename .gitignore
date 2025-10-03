@@ -17,3 +17,5 @@ logs/*
 FW.json
 
 data/*
+*.bin
+*.pdf

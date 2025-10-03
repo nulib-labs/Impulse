@@ -19,10 +19,6 @@ lp = LaunchPad(
     port=27017,
     uri_mode=True,
     name="fireworks",
-    mongoclient_kwargs={
-        "tls": True,
-        "tlsCAFile": certifi.where(),
-    },
     logdir="./logs",
 )
 fp = FilePad(
@@ -30,21 +26,19 @@ fp = FilePad(
     port=27017,
     uri_mode=True,
     database="fireworks",
-    mongoclient_kwargs={
-        "tls": True,
-        "tlsCAFile": certifi.where(),
-    },
 )
 
 fp.reset()
 lp.reset(password="2025-10-03")
 barcode_dir = "./data/raw/"
-for d in os.listdir(barcode_dir)[:3]:
+for d in os.listdir(barcode_dir):
+    if d == ".DS_Store":
+        continue
     file_path = os.path.join(barcode_dir, d)
     file_path = os.path.join(file_path, "JP2000")
 
     files = sorted(glob.glob(os.path.join(file_path, "*.jp2")))
-    files = files[:3]
+    files = files[:10]
     identifiers = []
     for f in sorted(files):
         file_id, identifier = fp.add_file(f, identifier=str(uuid.uuid4()))
@@ -68,9 +62,10 @@ for d in os.listdir(barcode_dir)[:3]:
             ),
             PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id"]),
         ],
-        spec={"identifiers": identifiers, "barcode_dir": "P0491_35556036056489"},
+        spec={"identifiers": identifiers, "barcode_dir": barcode_dir},
         name="OCR Firework",
     )
     wf = Workflow([fw])
 
     lp.add_wf(wf)
+    break

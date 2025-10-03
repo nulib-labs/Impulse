@@ -19,25 +19,29 @@ from tqdm import tqdm
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+
+
+def get_mongo_client_kwargs():
+    return {
+        "tls": True,
+        "tlsCAFile": certifi.where(),
+    }
+
+
 lp = LaunchPad(
     host=conn_str,
     port=27017,
     uri_mode=True,
     name="fireworks",
-    mongoclient_kwargs={
-        "tls": True,
-        "tlsCAFile": certifi.where(),
-    },
+    mongoclient_kwargs=get_mongo_client_kwargs(),
 )
+
 fp = FilePad(
-    host=(conn_str + "/fireworks?"),
+    host=conn_str + "/fireworks?",
     port=27017,
     uri_mode=True,
     database="fireworks",
-    mongoclient_kwargs={
-        "tls": True,
-        "tlsCAFile": certifi.where(),
-    },
+    mongoclient_kwargs=get_mongo_client_kwargs(),
 )
 
 
@@ -80,6 +84,7 @@ def image_conversion_task(*args):
         # Save processed image to a temporary file
         tmp_dir = tempfile.gettempdir()
         filename = os.path.join(tmp_dir, suffix)
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, "wb") as tmp_file:
             tmp_file.write(encoded_img.tobytes())
             tmp_path = tmp_file.name
@@ -118,7 +123,10 @@ def image_to_pdf(*args):
         raise ValueError("No images were retrieved from GridFS")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         temp_pdf_path = tmp_file.name
-
+        # Save images to PDF
+        images[0].save(
+            temp_pdf_path, save_all=True, append_images=images[1:], format="PDF"
+        )
         file_id, identifier = fp.add_file(temp_pdf_path, identifier=str(uuid4()))
 
     return FWAction(update_spec={"PDF_id": [identifier]})
@@ -136,7 +144,7 @@ def marker_on_pdf(*args):
     pdf_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
 
     file_contents, doc = fp.get_file(pdf_id)
-
+    print(doc)
     # Normalize to raw bytes
     if hasattr(file_contents, "read"):
         try:
