@@ -15,6 +15,7 @@ from PIL import Image
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.config.parser import ConfigParser
+from tqdm import tqdm
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -59,7 +60,7 @@ def image_conversion_task(*args):
     barcode_dir = args[1]
     identifiers_out = []
     i = 1
-    for file_id in identifiers:
+    for file_id in tqdm(identifiers, desc="Processing images"):
         # Get raw file bytes
         file_contents, doc = fp.get_file(file_id)
         # Convert bytes -> numpy array -> OpenCV image
