@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-3">
+  <h2 class="h5 mb-1" style="color: white;">Workflow submitted</h2>
+  <p class="mb-0" style="color: white;">Batch ID: <code>{{ batch_id }}</code></p>
+  {% if barcode and barcode|length > 0 %}
+  <p class="mb-0">Barcode: <code>{{ barcode }}</code></p>
+  {% endif %}
+</div>
+<ul class="list-group list-group-flush mb-3">
+  <li class="list-group-item bg-transparent d-flex justify-content-between">
+    <span>Files uploaded</span>
+    <span class="fw-semibold">{{ file_count }}</span>
+  </li>
+  <li class="list-group-item bg-transparent d-flex justify-content-between">
+    <span>Local upload directory</span>
+    <span class="fw-semibold">{{ upload_dir }}</span>
+  </li>
+  <li class="list-group-item bg-transparent d-flex justify-content-between">
+    <span>Workflow output directory</span>
+    <span class="fw-semibold">{{ output_dir }}</span>
+  </li>
+  <li class="list-group-item bg-transparent">
+    <div class="mb-1">Firework IDs</div>
+    <code>{{ fw_ids }}</code>
+  </li>
+  <li class="list-group-item bg-transparent">
+    <div class="mb-1">Remote qlaunch</div>
+    {% if qlaunch_info.enabled %}
+    {% if qlaunch_info.ok %}
+    <span class="badge bg-success">Triggered</span>
+    {% else %}
+    <span class="badge bg-danger">Failed</span>
+    {% endif %}
+    <div class="mt-2 small">
+      <div><strong>Command:</strong> {{ qlaunch_info.command }}</div>
+      {% if qlaunch_info.stdout %}<pre class="mt-2 small">{{ qlaunch_info.stdout }}</pre>{% endif %}
+      {% if qlaunch_info.stderr %}<pre class="mt-2 small">{{ qlaunch_info.stderr }}</pre>{% endif %}
+      {% if qlaunch_info.error %}<pre class="mt-2 small">{{ qlaunch_info.error }}</pre>{% endif %}
+    </div>
+    {% else %}
+    <span class="badge bg-secondary">Skipped</span>
+    {% if qlaunch_info.reason %}
+    <div class="mt-2 small">{{ qlaunch_info.reason }}</div>
+    {% endif %}
+    {% endif %}
+  </li>
+</ul>
+<div class="d-flex gap-2">
+  <a href="{{ url_for('index') }}" class="btn btn-outline-light">Upload more</a>
+  <a href="{{ url_for('monitor') }}" class="btn btn-outline-light">View monitor</a>
+</div>
+{% endblock %}

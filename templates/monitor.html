@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h2 class="h5 mb-1" style="color: white;">In-Progress FireWorks</h2>
+    <div class="small">States: {{ states|join(', ') }}</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('monitor') }}" class="btn btn-outline-light btn-sm">Refresh</a>
+  </div>
+</div>
+
+{% if items %}
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th scope="col" style="color: white;">FW ID</th>
+        <th scope="col" style="color: white;">Name</th>
+        <th scope="col" style="color: white;">State</th>
+        <th scope="col" style="color: white;">Updated</th>
+        <th scope="col" style="color: white;">Launches</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td style="color: white;"><code>{{ it.fw_id }}</code></td>
+        <td style="color: white;">{{ it.name }}</td>
+        <td><span class="badge bg-primary" style="color: white;">{{ it.state }}</span></td>
+        <td style="color: white;">
+          {% if it.updated_on %}
+          {{ it.updated_on }}
+          {% else %}
+          —
+          {% endif %}
+        </td>
+        <td style="color: white;">{{ it.launches|length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="alert alert-info" role="alert">
+  No in-progress FireWorks found.
+</div>
+{% endif %}
+{% endblock %}

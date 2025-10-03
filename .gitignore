@@ -19,3 +19,5 @@ FW.json
 data/*
 *.bin
 *.pdf
+
+uploads/*
