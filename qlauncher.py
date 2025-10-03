@@ -4,7 +4,6 @@ from fireworks.queue.queue_launcher import launch_rocket_to_queue, rapidfire
 import certifi
 import os
 from fireworks.utilities.fw_serializers import load_object_from_file
-import tasks
 
 
 def main():
