@@ -1,16 +1,10 @@
-from os.path import isdir
-from fireworks.core.fworker import FWorker
 from fireworks.core.launchpad import LaunchPad
-from fireworks.fw_config import QUEUEADAPTER_LOC, RAPIDFIRE_SLEEP_SECS, os
+from fireworks.fw_config import os
 from fireworks.utilities.filepad import FilePad
-import certifi
 from fireworks.core.firework import Firework, Workflow
-from fireworks.user_objects.firetasks.script_task import PyTask, ScriptTask
+from fireworks.user_objects.firetasks.script_task import PyTask
 import glob
 import uuid
-import auxiliary
-from fireworks.queue.queue_launcher import rapidfire
-from fireworks.queue.queue_adapter import QueueAdapterBase
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
