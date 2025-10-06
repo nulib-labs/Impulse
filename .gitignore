@@ -21,3 +21,6 @@ data/*
 *.pdf
 
 uploads/*
+downloaded_files/*
+.DS_Store
+pilot_testing/*

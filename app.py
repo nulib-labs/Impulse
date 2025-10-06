@@ -175,7 +175,8 @@ def upload():
             saved_paths.append(dest)
 
             # Add to FilePad and collect the identifier
-            _, identifier = fp.add_file(str(dest), identifier=str(uuid.uuid4()))
+            identifier = f"{barcode}_{fn}" if barcode else fn
+            _, identifier = fp.add_file(str(dest), identifier=identifier)
             identifiers.append(identifier)
 
     if not identifiers:

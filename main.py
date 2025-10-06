@@ -4,7 +4,7 @@ from fireworks.utilities.filepad import FilePad
 from fireworks.core.firework import Firework, Workflow
 from fireworks.user_objects.firetasks.script_task import PyTask
 import glob
-import uuid
+
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -22,44 +22,44 @@ fp = FilePad(
     database="fireworks",
 )
 
-fp.reset()
-lp.reset(password="2025-10-03")
-barcode_dir = "./data/raw/"
-for d in os.listdir(barcode_dir):
-    if d == ".DS_Store":
-        continue
-    file_path = os.path.join(barcode_dir, d)
-    file_path = os.path.join(file_path, "JP2000")
+barcode_dir = "./pilot_testing/p1074_35556032756942/"
 
-    files = sorted(glob.glob(os.path.join(file_path, "*.jp2")))
-    files = files[:10]
-    identifiers = []
-    for f in sorted(files):
-        file_id, identifier = fp.add_file(f, identifier=str(uuid.uuid4()))
-        print(f"{identifier}")
-        identifiers.append(identifier)
-
-    fw = Firework(
-        [
-            PyTask(
-                func="auxiliary.image_conversion_task",
-                inputs=[
-                    "identifiers",
-                    "barcode_dir",
-                ],  # Looking for key 'identifiers'
-                outputs="converted_images",
-            ),
-            PyTask(
-                func="auxiliary.image_to_pdf",
-                inputs=["converted_images", "barcode_dir"],
-                outputs="PDF_id",
-            ),
-            PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id"]),
-        ],
-        spec={"identifiers": identifiers, "barcode_dir": barcode_dir},
-        name="OCR Firework",
+file_path = os.path.join(barcode_dir, "JPG_OG")
+barcode = os.path.basename(os.path.normpath(barcode_dir))
+files = sorted(glob.glob(os.path.join(file_path, "*.jpg")))
+identifiers = []
+for f in sorted(files):
+    print(f)
+    name = f.split("/")[-1]
+    barcode_name = barcode_dir.split("/")[-1]
+    file_id, identifier = fp.add_file(
+        f,
+        identifier=str(barcode_name + name),
+        metadata={"source_path": f, "barcode": barcode, "filename": name},
     )
-    wf = Workflow([fw])
+    print(f"{identifier}")
+    identifiers.append(identifier)
 
-    lp.add_wf(wf)
-    break
+fw = Firework(
+    [
+        PyTask(
+            func="auxiliary.image_conversion_task",
+            inputs=[
+                "identifiers",
+                "barcode_dir",
+            ],  # Looking for key 'identifiers'
+            outputs="converted_images",
+        ),
+        PyTask(
+            func="auxiliary.image_to_pdf",
+            inputs=["converted_images", "barcode_dir"],
+            outputs="PDF_id",
+        ),
+        PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id"]),
+    ],
+    spec={"identifiers": identifiers, "barcode_dir": barcode_dir},
+    name="OCR Firework",
+)
+wf = Workflow([fw])
+
+lp.add_wf(wf)
