@@ -16,9 +16,33 @@ from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.config.parser import ConfigParser
 from tqdm import tqdm
+import math
+from typing import Union, Tuple
+from deskew import determine_skew
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+
+
+def rotate(
+    image: np.ndarray, angle: float, background: Union[int, Tuple[int, int, int]]
+) -> np.ndarray:
+    old_width, old_height = image.shape[:2]
+    angle_radian = math.radians(angle)
+    width = abs(np.sin(angle_radian) * old_height) + abs(
+        np.cos(angle_radian) * old_width
+    )
+    height = abs(np.sin(angle_radian) * old_width) + abs(
+        np.cos(angle_radian) * old_height
+    )
+
+    image_center = tuple(np.array(image.shape[1::-1]) / 2)
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    rot_mat[1, 2] += (width - old_width) / 2
+    rot_mat[0, 2] += (height - old_height) / 2
+    return cv2.warpAffine(
+        image, rot_mat, (int(round(height)), int(round(width))), borderValue=background
+    )
 
 
 def get_mongo_client_kwargs():
@@ -70,10 +94,9 @@ def image_conversion_task(*args):
         # Convert bytes -> numpy array -> OpenCV image
         nparr = np.frombuffer(file_contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        # Process image
         img, _ = w.binarize_or_gray(img)
-        img = w.deskew_with_hough(img)
+        angle = determine_skew(img, sigma=5.0)
+        img = rotate(img, angle, (0, 0, 0))
         img = w.remove_borders(img)
 
         # Encode as PNG in memory
@@ -198,9 +221,15 @@ def marker_on_pdf(*args):
 
     if Path(temp_pdf_path).stat().st_size == 0:
         raise ValueError("Temporary PDF file is empty after write")
-
+    # Save it to current dir for inspection test
+    with open(f"debug_{safe_id}.pdf", "wb") as dbg:
+        dbg.write(file_contents)
     # Run Marker on PDF via Python API
-    config = {"output_format": "json"}
+    config = {
+        "output_format": "json",
+        "paginate_output": True,
+        "use_llm": True,
+    }
     config_parser = ConfigParser(config)
     converter = PdfConverter(
         config=config_parser.generate_config_dict(),
@@ -234,3 +263,48 @@ def marker_on_pdf(*args):
         )
 
     return FWAction(update_spec={"marker_output": rendered})
+
+
+def json_to_md_html(*args):
+    json_text = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
+
+    def extract_blocks(children):
+        md_parts = []
+        html_parts = []
+        for block in children:
+            block_type = block.get("block_type", "")
+            html = block.get("html", "")
+            images = block.get("images", {})
+            # Text blocks
+            if block_type.lower().startswith("sectionheader"):
+                md_parts.append(html.replace("<h2>", "## ").replace("</h2>", ""))
+                html_parts.append(html)
+            elif block_type.lower() == "text":
+                md_parts.append(
+                    html.replace('<p block-type="Text">', "").replace("</p>", "")
+                )
+                html_parts.append(html)
+            # Images
+            if images:
+                for k, v in images.items():
+                    md_parts.append(f"![{k}](data:image/jpeg;base64,{v})")
+                    html_parts.append(
+                        f"<img src='data:image/jpeg;base64,{v}' alt='{k}' />"
+                    )
+            # Recursively process children
+            if block.get("children"):
+                sub_md, sub_html = extract_blocks(block["children"])
+                md_parts.extend(sub_md)
+                html_parts.extend(sub_html)
+        return md_parts, html_parts
+
+    json_dict = (
+        json_text.model_dump(mode="json")
+        if hasattr(json_text, "model_dump")
+        else json_text
+    )
+    md, html = extract_blocks(json_dict.get("children", []))
+    return FWAction(
+        update_spec={"md_output": "\n\n".join(md), "html_output": "\n".join(html)},
+        stored_data={"md_output": "\n\n".join(md), "html_output": "\n".join(html)},
+    )
