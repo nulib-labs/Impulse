@@ -228,7 +228,6 @@ def marker_on_pdf(*args):
     config = {
         "output_format": "json",
         "paginate_output": True,
-        "use_llm": True,
     }
     config_parser = ConfigParser(config)
     converter = PdfConverter(
