@@ -4,6 +4,39 @@ from fireworks.utilities.filepad import FilePad
 from fireworks.core.firework import Firework, Workflow
 from fireworks.user_objects.firetasks.script_task import PyTask
 import glob
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--input",
+    "-i",
+    help="The input path. If the input path is a directory, iterates over all files inside. Pass --recursive option to loop through all child directories.",
+)
+parser.add_argument(
+    "--recursive",
+    "-r",
+    help="If this argument is passed, adds files recursively to the workflow.",
+)
+
+parser.add_argument(
+    "--identifier",
+    "-id",
+    help="The identifier for which the files should be linked. This should be a barcode.",
+    action="store_true",
+)
+
+parser.add_argument(
+    "--fw_name",
+    "-n",
+    help="A custom name of the workflow. If no argument is passed, defaults to value of --identifier",
+    required=False,
+)
+
+args = parser.parse_args()
+
+input_path = args.input
+is_recursive = args.recursive
+identifier = args.identifier
 
 
 conn_str: str
@@ -22,44 +55,56 @@ fp = FilePad(
     database="fireworks",
 )
 
-barcode_dir = "./pilot_testing/p1074_35556032756942/"
 
-file_path = os.path.join(barcode_dir, "JPG_OG")
-barcode = os.path.basename(os.path.normpath(barcode_dir))
-files = sorted(glob.glob(os.path.join(file_path, "*.jpg")))
-identifiers = []
-for f in sorted(files):
-    print(f)
-    name = f.split("/")[-1]
-    barcode_name = barcode_dir.split("/")[-1]
-    file_id, identifier = fp.add_file(
-        f,
-        identifier=str(barcode_name + name),
-        metadata={"source_path": f, "barcode": barcode, "filename": name},
+suffixes = ["jpg", "png", "jpeg", "tiff", "jp2"]
+
+files = []
+
+if is_recursive:
+    for suffix in suffixes:
+        files.extend(
+            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+        )
+    files = sorted(files)
+    pass
+
+else:
+    for suffix in suffixes:
+        files.extend(
+            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+        )
+    identifiers = []
+    for f in sorted(files):
+        print(f)
+        name = f.split("/")[-1]
+        file_id, identifier = fp.add_file(
+            f,
+            identifier=str(identifier + name),
+            metadata={"source_path": f, "identifier": identifier, "filename": name},
+        )
+        print(f"{identifier}")
+        identifiers.append(identifier)
+
+    fw = Firework(
+        [
+            PyTask(
+                func="auxiliary.image_conversion_task",
+                inputs=[
+                    "identifiers",
+                    "barcode_dir",
+                ],
+                outputs="converted_images",
+            ),
+            PyTask(
+                func="auxiliary.image_to_pdf",
+                inputs=["converted_images", "barcode_dir"],
+                outputs="PDF_id",
+            ),
+            PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id"]),
+        ],
+        name=identifier,
+        spec={"identifiers": identifiers, "barcode_dir": barcode_dir},
     )
-    print(f"{identifier}")
-    identifiers.append(identifier)
+    wf = Workflow([fw], metadata={"barcode": barcode}, name=(barcode + "_workflow"))
 
-fw = Firework(
-    [
-        PyTask(
-            func="auxiliary.image_conversion_task",
-            inputs=[
-                "identifiers",
-                "barcode_dir",
-            ],  # Looking for key 'identifiers'
-            outputs="converted_images",
-        ),
-        PyTask(
-            func="auxiliary.image_to_pdf",
-            inputs=["converted_images", "barcode_dir"],
-            outputs="PDF_id",
-        ),
-        PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id"]),
-    ],
-    spec={"identifiers": identifiers, "barcode_dir": barcode_dir},
-    name="OCR Firework",
-)
-wf = Workflow([fw])
-
-lp.add_wf(wf)
+    lp.add_wf(wf)
