@@ -3,8 +3,7 @@ from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import os
 from fireworks.utilities.filepad import FilePad
 import certifi
-from fireworks.core.firework import FWAction, Firework
-from fireworks.user_objects.firetasks.script_task import PyTask
+from fireworks.core.firework import FWAction
 from marker.renderers.json import JSONOutput
 import woolworm
 import cv2
@@ -45,6 +44,38 @@ def rotate(
     )
 
 
+def process_historical_document(image_np):
+    """
+    Process a historical document using Otsu binarization.
+    Returns the binarized image.
+    """
+
+    # Convert to grayscale if RGB
+    if len(image_np.shape) == 3 and image_np.shape[2] == 3:
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = image_np
+
+    # Denoise
+    dst = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+
+    # Otsu’s thresholding (black text on white)
+    otsu_thresh, _ = cv2.threshold(dst, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    adjusted_thresh = otsu_thresh * 1.2
+    _, binary = cv2.threshold(dst, adjusted_thresh, 255, cv2.THRESH_BINARY)
+    # (Optional) Diagnostic printouts — can be removed
+    foreground_ratio = np.sum(binary == 0) / binary.size  # proportion of dark pixels
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    sizes = stats[1:, cv2.CC_STAT_AREA]
+    large_components = sizes[sizes > 50]
+
+    print(f"→ Foreground ratio: {foreground_ratio:.3f}")
+    print(f"→ Large components: {len(large_components)}")
+
+    # Return just the binarized image
+    return binary
+
+
 def get_mongo_client_kwargs():
     return {
         "tls": True,
@@ -69,19 +100,6 @@ fp = FilePad(
 )
 
 
-def printurn(*args):
-    result = []
-    for arg in args:
-        if isinstance(arg, list) and len(arg) == 1:
-            result.append(arg[0])
-        else:
-            result.append(arg)
-    if len(result) == 1:
-        result = result[0]
-    print(result)
-    return result
-
-
 def image_conversion_task(*args):
     w = woolworm.Woolworm()
     identifiers = args[0]
@@ -91,16 +109,26 @@ def image_conversion_task(*args):
     for file_id in tqdm(identifiers, desc="Processing images"):
         # Get raw file bytes
         file_contents, doc = fp.get_file(file_id)
+
         # Convert bytes -> numpy array -> OpenCV image
         nparr = np.frombuffer(file_contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        img, _ = w.binarize_or_gray(img)
-        angle = determine_skew(img, sigma=5.0)
-        img = rotate(img, angle, (0, 0, 0))
-        img = w.remove_borders(img)
 
-        # Encode as PNG in memory
-        success, encoded_img = cv2.imencode(".png", img)
+        grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        angle = determine_skew(grayscale)
+        rotated = rotate(img, angle, (0, 0, 0))
+
+        # Check if image was loaded successfully
+        if img is None:
+            print(f"Failed to load image: {file_id}")
+            continue
+
+        # Process the image
+        processed_img = process_historical_document(rotated)
+        # Now you can save or use the processed image
+        # For example, encode back to bytes if needed:
+
+        success, encoded_img = cv2.imencode(".png", processed_img)
         if not success:
             raise ValueError("Failed to encode image")
         suffix = f"{barcode_dir}_{i:010d}.png"
@@ -115,7 +143,9 @@ def image_conversion_task(*args):
 
         # Add file to your file manager / database
         file_id, identifier = fp.add_file(
-            tmp_path, identifier=str(uuid4())
+            tmp_path,
+            identifier=str(uuid4()),
+            metadata={"firework_name": "image_converstion"},
         )  # adjust this to your API
         identifiers_out.append(identifier)
         i += 1
@@ -130,6 +160,7 @@ def image_to_pdf(*args):
     args[1] = optional barcode_dir (not used here)
     """
     identifiers = args[0]
+    identifier = args[1]
     images = []
 
     for file_id in identifiers:
@@ -150,9 +181,17 @@ def image_to_pdf(*args):
         images[0].save(
             temp_pdf_path, save_all=True, append_images=images[1:], format="PDF"
         )
-        file_id, identifier = fp.add_file(temp_pdf_path, identifier=str(uuid4()))
+        file_id, identifier = fp.add_file(
+            temp_pdf_path,
+            identifier=str(uuid4()),
+            metadata={"firework_name": "image_to_pdf", "identifier": identifier},
+        )
+        print(file_id, identifier)
 
-    return FWAction(update_spec={"PDF_id": [identifier]})
+    return FWAction(
+        update_spec={"PDF_id": [identifier], "pdf_gfs_id": file_id},
+        stored_data={"pdf_gfs_id": file_id},
+    )
 
 
 def marker_on_pdf(*args):
@@ -161,11 +200,15 @@ def marker_on_pdf(*args):
     args[0] = GridFS file ID of the PDF (may be nested)
     args[1] = optional barcode_dir (not used here)
     """
-    import base64, binascii, logging, os, re
+    import base64
+    import binascii
+    import logging
+    import os
+    import re
     from pathlib import Path
 
     pdf_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
-
+    identifier = args[1]
     file_contents, doc = fp.get_file(pdf_id)
     print(doc)
     # Normalize to raw bytes
@@ -250,7 +293,12 @@ def marker_on_pdf(*args):
             tmp_json.write(rendered.model_dump_json(indent=2))
 
         try:
-            fp.add_file(json_path, identifier=f"marked_{safe_id}.json")
+            file_id, id = fp.add_file(
+                json_path,
+                identifier=f"marked_{safe_id}.json",
+                metadata={"firework_name": "marker_on_pdf"},
+            )
+            print(file_id, id)
         finally:
             try:
                 os.unlink(json_path)
@@ -261,7 +309,7 @@ def marker_on_pdf(*args):
             f"Marker/PDFium failed on {pdf_id} (temp: {temp_pdf_path}): {e}"
         )
 
-    return FWAction(update_spec={"marker_output": rendered})
+    return FWAction(update_spec={"marker_output": rendered}, stored_data={})
 
 
 def json_to_md_html(*args):
