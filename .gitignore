@@ -24,3 +24,4 @@ uploads/*
 downloaded_files/*
 .DS_Store
 pilot_testing/*
+test_image_detection.py
