@@ -5,7 +5,16 @@ from pymongo import MongoClient
 import argparse
 
 parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--target_id", "-id", help="The barcode identifier for what you wish to download."
+)
+parser.add_argument(
+    "--output_file", "-o", help="A file path to which the file will be saved."
+)
+args = parser.parse_args()
 
+target_id = args.target_id
+output_file = args.output_file
 
 url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 
@@ -35,7 +44,6 @@ def save_file(file_contents, doc, output_file_name):
     # Ensure doc and file_contents are not None before proceeding
     if doc is not None and file_contents is not None:
         filename = doc.get("original_file_name", "")
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
         with open(output_file_name, "wb") as f:
             f.write(file_contents)
     else:
@@ -45,10 +53,7 @@ def save_file(file_contents, doc, output_file_name):
 def get_filecontents_and_doc(gfs_id):
     conn_str: str
     conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
-    # === CONFIGURATION ===
-    MONGO_URI = os.getenv(
-        "MONGODB_OCR_DEVELOPMENT_CONN_STRING"
-    )  # or your remote MongoDB URI
+
     DB_NAME = "fireworks"
     FILEPAD_COLLECTION = "filepad"
     GRIDFS_COLLECTION = "filepad_gfs"
@@ -65,6 +70,6 @@ def get_filecontents_and_doc(gfs_id):
     return file_contents, doc
 
 
-gfs_id = get_requested_file_gfs_id("p1074_35556030758452")
+gfs_id = get_requested_file_gfs_id(target_id)
 file_contents, doc = get_filecontents_and_doc(gfs_id)
-save_file(file_contents, doc, "./my_file.pdf")
+save_file(file_contents, doc, output_file)
