@@ -1,11 +1,15 @@
-from pymongo import MongoClient
 from fireworks.utilities.filepad import FilePad
-import gridfs
 import os
-from bson import ObjectId
-import gzip
-import io
 import certifi
+from pymongo import MongoClient
+import argparse
+
+parser = argparse.ArgumentParser()
+
+
+url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
+
+OUTPUT_DIR = "./downloaded_files"
 
 
 def get_mongo_client_kwargs():
@@ -15,33 +19,52 @@ def get_mongo_client_kwargs():
     }
 
 
-conn_str: str
-conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
-# === CONFIGURATION ===
-MONGO_URI = os.getenv(
-    "MONGODB_OCR_DEVELOPMENT_CONN_STRING"
-)  # or your remote MongoDB URI
-DB_NAME = "fireworks"
-FILEPAD_COLLECTION = "filepad"
-GRIDFS_COLLECTION = "filepad_gfs"
-OUTPUT_DIR = "./downloaded_files"
+def get_requested_file_gfs_id(target_id):
+    client = MongoClient(url)
 
-fp = FilePad(
-    host=conn_str + "/fireworks?",
-    port=27017,
-    uri_mode=True,
-    database="fireworks",
-    mongoclient_kwargs=get_mongo_client_kwargs(),
-)
-# Save
-file_contents, doc = fp.get_file_by_id("68e405af7380cf221007b399")
+    db = client["fireworks"]
+    filepad_col = db["filepad"]
+    result = filepad_col.find_one(
+        {"metadata.identifier": target_id, "metadata.firework_name": "image_to_pdf"}
+    )
+    gfs_id = result.get("gfs_id")
+    return gfs_id
 
-# Ensure doc and file_contents are not None before proceeding
-if doc is not None and file_contents is not None:
-    filename = doc.get("original_file_name", "")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(os.path.join(OUTPUT_DIR, filename), "wb") as f:
-        f.write(file_contents)
-    print(file_contents)
-else:
-    print("File or document not found.")
+
+def save_file(file_contents, doc, output_file_name):
+    # Ensure doc and file_contents are not None before proceeding
+    if doc is not None and file_contents is not None:
+        filename = doc.get("original_file_name", "")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        with open(output_file_name, "wb") as f:
+            f.write(file_contents)
+    else:
+        print("File or document not found.")
+
+
+def get_filecontents_and_doc(gfs_id):
+    conn_str: str
+    conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+    # === CONFIGURATION ===
+    MONGO_URI = os.getenv(
+        "MONGODB_OCR_DEVELOPMENT_CONN_STRING"
+    )  # or your remote MongoDB URI
+    DB_NAME = "fireworks"
+    FILEPAD_COLLECTION = "filepad"
+    GRIDFS_COLLECTION = "filepad_gfs"
+
+    fp = FilePad(
+        host=conn_str + "/fireworks?",
+        port=27017,
+        uri_mode=True,
+        database="fireworks",
+        mongoclient_kwargs=get_mongo_client_kwargs(),
+    )
+
+    file_contents, doc = fp.get_file_by_id(gfs_id)
+    return file_contents, doc
+
+
+gfs_id = get_requested_file_gfs_id("p1074_35556030758452")
+file_contents, doc = get_filecontents_and_doc(gfs_id)
+save_file(file_contents, doc, "./my_file.pdf")
