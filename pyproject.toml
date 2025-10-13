@@ -9,8 +9,10 @@ dependencies = [
     "fabric>=3.2.2",
     "fireworks>=2.0.5",
     "loguru>=0.7.3",
+    "lxml>=6.0.2",
     "matplotlib>=3.10.6",
     "pillow>=10.4.0",
+    "pymongo>=4.15.2",
     "pypdf2>=3.0.1",
     "woolworm>=0.0.9",
 ]

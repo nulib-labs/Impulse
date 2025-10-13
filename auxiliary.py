@@ -1,3 +1,4 @@
+from typing_extensions import deprecated
 from uuid import uuid4
 from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import os
@@ -101,9 +102,8 @@ fp = FilePad(
 
 
 def image_conversion_task(*args):
-    w = woolworm.Woolworm()
     identifiers = args[0]
-    barcode_dir = args[1]
+    accession_number = args[1]
     identifiers_out = []
     i = 1
     for file_id in tqdm(identifiers, desc="Processing images"):
@@ -131,7 +131,7 @@ def image_conversion_task(*args):
         success, encoded_img = cv2.imencode(".png", processed_img)
         if not success:
             raise ValueError("Failed to encode image")
-        suffix = f"{barcode_dir}_{i:010d}.png"
+        suffix = f"{accession_number}_{i:010d}.png"
         # Save processed image to a temporary file
         tmp_dir = tempfile.gettempdir()
         filename = os.path.join(tmp_dir, suffix)
@@ -144,8 +144,10 @@ def image_conversion_task(*args):
         # Add file to your file manager / database
         file_id, identifier = fp.add_file(
             tmp_path,
-            identifier=str(uuid4()),
-            metadata={"firework_name": "image_converstion"},
+            metadata={
+                "firework_name": "image_conversion",
+                "accession_number": accession_number,
+            },
         )  # adjust this to your API
         identifiers_out.append(identifier)
         i += 1
@@ -160,7 +162,7 @@ def image_to_pdf(*args):
     args[1] = optional barcode_dir (not used here)
     """
     identifiers = args[0]
-    identifier = args[1]
+    accession_number = args[1]
     images = []
 
     for file_id in identifiers:
@@ -184,7 +186,10 @@ def image_to_pdf(*args):
         file_id, identifier = fp.add_file(
             temp_pdf_path,
             identifier=str(uuid4()),
-            metadata={"firework_name": "image_to_pdf", "identifier": identifier},
+            metadata={
+                "firework_name": "image_to_pdf",
+                "accession_number": accession_number,
+            },
         )
         print(file_id, identifier)
 
@@ -208,7 +213,7 @@ def marker_on_pdf(*args):
     from pathlib import Path
 
     pdf_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
-    identifier = args[1]
+    accession_number = args[1]
     file_contents, doc = fp.get_file(pdf_id)
     print(doc)
     # Normalize to raw bytes
@@ -295,8 +300,10 @@ def marker_on_pdf(*args):
         try:
             file_id, id = fp.add_file(
                 json_path,
-                identifier=f"marked_{safe_id}.json",
-                metadata={"firework_name": "marker_on_pdf"},
+                metadata={
+                    "firework_name": "marker_on_pdf",
+                    "accession_number": accession_number,
+                },
             )
             print(file_id, id)
         finally:

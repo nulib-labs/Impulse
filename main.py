@@ -87,7 +87,7 @@ else:
             glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
         )
     identifiers = []
-    for f in tqdm(sorted(files)[:3], desc="Uploading files..."):
+    for f in tqdm(sorted(files), desc="Uploading files..."):
         name = f.split("/")[-1]
         new_identifier = str(identifier) + name
         file_id, _ = fp.add_file(

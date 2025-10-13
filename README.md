@@ -35,3 +35,5 @@ We also need to fix rotations/deskew. My code sucks for this.
 Finally, we need to standardize our data model, or at least visualize it so that people do not put their brain into pretzels trying to get a foreign key relation.
 
 This is truly a project where getting 90% of the way there took 10% of the time.
+
+Get Checksum of files
