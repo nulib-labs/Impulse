@@ -116,7 +116,7 @@ def image_conversion_task(*args):
 
         grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         angle = determine_skew(grayscale)
-        rotated = rotate(img, angle, (0, 0, 0))
+        rotated = rotate(img, angle, (255, 255, 255))
 
         # Check if image was loaded successfully
         if img is None:
@@ -144,6 +144,7 @@ def image_conversion_task(*args):
         # Add file to your file manager / database
         file_id, identifier = fp.add_file(
             tmp_path,
+            identifier=str(uuid4()),
             metadata={
                 "firework_name": "image_conversion",
                 "accession_number": accession_number,
@@ -300,6 +301,7 @@ def marker_on_pdf(*args):
         try:
             file_id, id = fp.add_file(
                 json_path,
+                identifier=str(uuid4),
                 metadata={
                     "firework_name": "marker_on_pdf",
                     "accession_number": accession_number,
@@ -317,48 +319,3 @@ def marker_on_pdf(*args):
         )
 
     return FWAction(update_spec={"marker_output": rendered}, stored_data={})
-
-
-def json_to_md_html(*args):
-    json_text = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
-
-    def extract_blocks(children):
-        md_parts = []
-        html_parts = []
-        for block in children:
-            block_type = block.get("block_type", "")
-            html = block.get("html", "")
-            images = block.get("images", {})
-            # Text blocks
-            if block_type.lower().startswith("sectionheader"):
-                md_parts.append(html.replace("<h2>", "## ").replace("</h2>", ""))
-                html_parts.append(html)
-            elif block_type.lower() == "text":
-                md_parts.append(
-                    html.replace('<p block-type="Text">', "").replace("</p>", "")
-                )
-                html_parts.append(html)
-            # Images
-            if images:
-                for k, v in images.items():
-                    md_parts.append(f"![{k}](data:image/jpeg;base64,{v})")
-                    html_parts.append(
-                        f"<img src='data:image/jpeg;base64,{v}' alt='{k}' />"
-                    )
-            # Recursively process children
-            if block.get("children"):
-                sub_md, sub_html = extract_blocks(block["children"])
-                md_parts.extend(sub_md)
-                html_parts.extend(sub_html)
-        return md_parts, html_parts
-
-    json_dict = (
-        json_text.model_dump(mode="json")
-        if hasattr(json_text, "model_dump")
-        else json_text
-    )
-    md, html = extract_blocks(json_dict.get("children", []))
-    return FWAction(
-        update_spec={"md_output": "\n\n".join(md), "html_output": "\n".join(html)},
-        stored_data={"md_output": "\n\n".join(md), "html_output": "\n".join(html)},
-    )

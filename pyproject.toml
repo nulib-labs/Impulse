@@ -11,8 +11,10 @@ dependencies = [
     "loguru>=0.7.3",
     "lxml>=6.0.2",
     "matplotlib>=3.10.6",
+    "mplcursors>=0.7",
     "pillow>=10.4.0",
     "pymongo>=4.15.2",
     "pypdf2>=3.0.1",
+    "python-doctr>=1.0.0",
     "woolworm>=0.0.9",
 ]

@@ -6,7 +6,7 @@ from fireworks.user_objects.firetasks.script_task import PyTask
 import glob
 import argparse
 from tqdm import tqdm
-
+from fabric import Connection
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -22,8 +22,8 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--identifier",
-    "-id",
+    "--accession_number",
+    "-a",
     help="The identifier for which the files should be linked. This should be a barcode.",
 )
 
@@ -44,8 +44,8 @@ parser.add_argument(
 args = parser.parse_args()
 
 input_path = args.input
+accession_number = args.accession_number
 is_recursive = args.recursive
-identifier = args.identifier
 fw_name = args.fw_name
 do_reset = args.reset
 
@@ -89,11 +89,15 @@ else:
     identifiers = []
     for f in tqdm(sorted(files), desc="Uploading files..."):
         name = f.split("/")[-1]
-        new_identifier = str(identifier) + name
+        new_identifier = name + "_" + str(accession_number).zfill(10)
         file_id, _ = fp.add_file(
             f,
             identifier=new_identifier,
-            metadata={"source_path": f, "identifier": identifier, "filename": name},
+            metadata={
+                "source_path": f,
+                "filename": name,
+                "accession_number": accession_number,
+            },
         )
         identifiers.append(new_identifier)
     fw = Firework(
@@ -102,20 +106,24 @@ else:
                 func="auxiliary.image_conversion_task",
                 inputs=[
                     "identifiers",
-                    "identifier",
+                    "accession_number",
                 ],
                 outputs="converted_images",
             ),
             PyTask(
                 func="auxiliary.image_to_pdf",
-                inputs=["converted_images", "identifier"],
+                inputs=["converted_images", "accession_number"],
                 outputs="PDF_id",
             ),
-            PyTask(func="auxiliary.marker_on_pdf", inputs=["PDF_id", "identifier"]),
+            PyTask(
+                func="auxiliary.marker_on_pdf", inputs=["PDF_id", "accession_number"]
+            ),
         ],
         name=fw_name,
-        spec={"identifiers": identifiers, "identifier": identifier},
+        spec={"identifiers": identifiers, "accession_number": accession_number},
     )
-    wf = Workflow([fw], metadata={"identifier": identifier}, name=identifier)
+    wf = Workflow(
+        [fw], metadata={"accession_number": accession_number}, name=accession_number
+    )
 
     lp.add_wf(wf)
