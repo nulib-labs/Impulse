@@ -33,3 +33,4 @@ fabfile.py
 .DS_Store
 FW_submit.script
 pilot_test_data/
+*.pkl
