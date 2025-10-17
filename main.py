@@ -69,61 +69,126 @@ if do_reset:
     lp.reset("2025-10-08", require_password=False)
     fp.reset()
 
-suffixes = ["jpg", "png", "jpeg", "tiff", "jp2"]
+suffixes = ["jpg", "png", "jpeg", "tiff", "jp2", "xml"]
 
 files = []
 
 if is_recursive:
+    print(suffixes)
     for suffix in suffixes:
         files.extend(
             glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
         )
     files = sorted(files)
+    print(files)
     pass
 
 else:
+    print(suffixes)
     for suffix in suffixes:
         files.extend(
             glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
         )
+    print(files)
     identifiers = []
+    xml_identifier = None
     for f in tqdm(sorted(files), desc="Uploading files..."):
         name = f.split("/")[-1]
-        new_identifier = name + "_" + str(accession_number).zfill(10)
-        file_id, _ = fp.add_file(
-            f,
-            identifier=new_identifier,
-            metadata={
-                "source_path": f,
-                "filename": name,
-                "accession_number": accession_number,
-            },
+        new_identifier = str(accession_number) + "_" + str(name).zfill(10)
+        if not f.endswith(".xml"):
+            file_id, _ = fp.add_file(
+                f,
+                identifier=new_identifier,
+                metadata={
+                    "source_path": f,
+                    "filename": name,
+                    "accession_number": accession_number,
+                },
+            )
+            identifiers.append(new_identifier)
+        else:
+            print("Found metadata xml file:")
+            file_id, _ = fp.add_file(
+                f,
+                identifier=new_identifier,
+                metadata={
+                    "source_path": f,
+                    "filename": name,
+                    "accession_number": accession_number,
+                },
+            )
+            xml_identifier = new_identifier
+    if xml_identifier is not None:
+        spec = {
+            "identifiers": identifiers,
+            "accession_number": accession_number,
+            "xml_identifier": xml_identifier,
+        }
+
+    else:
+        spec = {"identifiers": identifiers, "accession_number": accession_number}
+
+    if xml_identifier is not None:
+        fw = Firework(
+            [
+                PyTask(
+                    func="auxiliary.convert_mets_to_yml",
+                    inputs=[
+                        "xml_identifier",
+                        "accession_number",
+                    ],
+                    outputs="converted_images",
+                ),
+                PyTask(
+                    func="auxiliary.image_conversion_task",
+                    inputs=[
+                        "identifiers",
+                        "accession_number",
+                    ],
+                    outputs="converted_images",
+                ),
+                PyTask(
+                    func="auxiliary.image_to_pdf",
+                    inputs=["converted_images", "accession_number"],
+                    outputs="PDF_id",
+                ),
+                PyTask(
+                    func="auxiliary.marker_on_pdf",
+                    inputs=["PDF_id", "accession_number"],
+                ),
+            ],
+            name=fw_name,
+            spec=spec,
         )
-        identifiers.append(new_identifier)
-    fw = Firework(
-        [
-            PyTask(
-                func="auxiliary.image_conversion_task",
-                inputs=[
-                    "identifiers",
-                    "accession_number",
-                ],
-                outputs="converted_images",
-            ),
-            PyTask(
-                func="auxiliary.image_to_pdf",
-                inputs=["converted_images", "accession_number"],
-                outputs="PDF_id",
-            ),
-            PyTask(
-                func="auxiliary.marker_on_pdf", inputs=["PDF_id", "accession_number"]
-            ),
-        ],
-        name=fw_name,
-        spec={"identifiers": identifiers, "accession_number": accession_number},
-    )
-    wf = Workflow(
-        [fw], metadata={"accession_number": accession_number}, name=accession_number
-    )
+        wf = Workflow(
+            [fw], metadata={"accession_number": accession_number}, name=accession_number
+        )
+    else:
+        fw = Firework(
+            [
+                PyTask(
+                    func="auxiliary.image_conversion_task",
+                    inputs=[
+                        "identifiers",
+                        "accession_number",
+                    ],
+                    outputs="converted_images",
+                ),
+                PyTask(
+                    func="auxiliary.image_to_pdf",
+                    inputs=["converted_images", "accession_number"],
+                    outputs="PDF_id",
+                ),
+                PyTask(
+                    func="auxiliary.marker_on_pdf",
+                    inputs=["PDF_id", "accession_number"],
+                ),
+            ],
+            name=fw_name,
+            spec=spec,
+        )
+        wf = Workflow(
+            [fw], metadata={"accession_number": accession_number}, name=accession_number
+        )
 
     lp.add_wf(wf)

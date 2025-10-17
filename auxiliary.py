@@ -19,6 +19,7 @@ from tqdm import tqdm
 import math
 from typing import Union, Tuple
 from deskew import determine_skew
+import lxml.etree as ET
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -99,6 +100,183 @@ fp = FilePad(
     database="fireworks",
     mongoclient_kwargs=get_mongo_client_kwargs(),
 )
+
+
+def convert_mets_to_yml(*args):
+    """
+    FireWorks task function: Convert a METS XML file from GridFS into a YAML file
+    following HathiTrust ingest specs, and save the YAML back to GridFS.
+    args[0] = gfs_id of the METS XML file in GridFS
+    """
+    gfs_id = args[0]
+    accession_number = args[1]
+    # === Step 1: Get XML contents from GridFS ===
+    file_contents, doc = fp.get_file(gfs_id)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp_xml:
+        tmp_xml.write(file_contents)
+        tmp_xml_path = tmp_xml.name
+
+    # === Step 2: Parse the XML ===
+    try:
+        parser = ET.XMLParser(remove_blank_text=True)
+        tree = ET.parse(tmp_xml_path, parser)
+        root = tree.getroot()
+    except ET.XMLSyntaxError as e:
+        print(f"Error: Invalid XML file: {e}")
+        raise RuntimeError("Invalid METS XML file") from e
+
+    ns = {
+        "xmlns": "http://www.loc.gov/METS/",
+        "xlink": "http://www.w3.org/1999/xlink",
+    }
+
+    def find_filename_by_file_id(file_id):
+        node = root.xpath(f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns)
+        if not node:
+            return None
+        href = node[0].get("{http://www.w3.org/1999/xlink}href", "")
+        return href[7:] if href.startswith("file://") else href
+
+    # === Step 3: Extract header information ===
+    mets_hdr = root.xpath("//xmlns:metsHdr", namespaces=ns)
+    capture_date = mets_hdr[0].get("CREATEDATE") + "-06:00" if mets_hdr else None
+
+    suprascan = False
+    scanning_order_rtl = False
+    reading_order_rtl = False
+    resolution = 400
+
+    yaml_lines = []
+    yaml_lines.append(f"capture_date: {capture_date}")
+    if suprascan:
+        yaml_lines.append("scanner_make: SupraScan")
+        yaml_lines.append("scanner_model: Quartz A1")
+    else:
+        yaml_lines.append("scanner_make: Kirtas")
+        yaml_lines.append("scanner_model: APT 1200")
+    yaml_lines.append(
+        'scanner_user: "Northwestern University Library: Repository & Digital Curation"'
+    )
+    yaml_lines.append(f"contone_resolution_dpi: {resolution}")
+    yaml_lines.append(f"image_compression_date: {capture_date}")
+    yaml_lines.append("image_compression_agent: northwestern")
+    yaml_lines.append('image_compression_tool: ["LIMB v4.5.0.0"]')
+    yaml_lines.append(
+        f"scanning_order: {'right-to-left' if scanning_order_rtl else 'left-to-right'}"
+    )
+    yaml_lines.append(
+        f"reading_order: {'right-to-left' if reading_order_rtl else 'left-to-right'}"
+    )
+    yaml_lines.append("pagedata:")
+
+    # === Step 4: Logical structMap page iteration ===
+    logical_pages = root.xpath(
+        '//xmlns:structMap[@TYPE="logical"]//xmlns:div[@TYPE="page"]', namespaces=ns
+    )
+
+    for element in logical_pages:
+        fileptr = element.xpath(
+            "./xmlns:fptr[starts-with(@FILEID, 'JP2')]", namespaces=ns
+        )
+        if not fileptr:
+            continue
+        file_id = fileptr[0].get("FILEID")
+        filename = find_filename_by_file_id(file_id)
+        if not filename:
+            continue
+
+        parent = element.getparent()
+        parent_label = parent.get("LABEL", "")
+        parent_type = parent.get("TYPE", "")
+        orderlabel = element.get("ORDERLABEL", "")
+        line = None
+
+        # Label logic
+        if element == parent[0]:
+            if (
+                parent_label == "Cover"
+                and parent_type == "cover"
+                and parent == logical_pages[0].getparent()
+            ):
+                label = "FRONT_COVER"
+                line = f'{filename}: {{ label: "{label}" }}'
+            elif parent_label == "Front Matter" and orderlabel:
+                line = f'{filename}: {{ orderlabel: "{orderlabel}" }}'
+            elif parent_label == "Title":
+                label = "TITLE"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label == "Contents":
+                label = "TABLE_OF_CONTENTS"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label == "Preface":
+                label = "PREFACE"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label.startswith("Chapter") or parent_label == "Appendix":
+                label = "CHAPTER_START"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label in ("Notes", "Bibliography"):
+                label = "REFERENCES"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label == "Index":
+                label = "INDEX"
+                line = (
+                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    if orderlabel
+                    else f'{filename}: {{ label: "{label}" }}'
+                )
+            elif parent_label == "Cover" and parent_type == "cover":
+                label = "BACK_COVER"
+                line = f'{filename}: {{ label: "{label}" }}'
+        else:
+            if orderlabel:
+                line = f'{filename}: {{ orderlabel: "{orderlabel}" }}'
+
+        if line:
+            yaml_lines.append("    " + line)
+
+    # === Step 5: Write YAML to temp file ===
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".yml") as tmp_yml:
+        tmp_yml.write("\n".join(yaml_lines).encode("utf-8"))
+        tmp_yml_path = tmp_yml.name
+
+    # === Step 6: Save YAML back to GridFS ===
+    file_id, identifier = fp.add_file(
+        tmp_yml_path,
+        identifier=str(uuid4()),
+        metadata={
+            "firework_name": "convert_mets_to_yml",
+            "source_mets_gfs_id": gfs_id,
+            "accession_number": accession_number,
+        },
+    )
+
+    print(f"Wrote YAML to GridFS with ID: {file_id}")
+
+    return FWAction(
+        update_spec={"yml_gfs_id": file_id, "yml_identifier": identifier},
+        stored_data={"yml_gfs_id": file_id},
+    )
 
 
 def image_conversion_task(*args):
