@@ -137,7 +137,7 @@ else:
                         "xml_identifier",
                         "accession_number",
                     ],
-                    outputs="converted_images",
+                    outputs="yaml_file",
                 ),
                 PyTask(
                     func="auxiliary.image_conversion_task",

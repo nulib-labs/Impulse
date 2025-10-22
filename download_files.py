@@ -53,16 +53,7 @@ def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
             "metadata.firework_name": "image_to_pdf",
         }
     )
-    print(result)
-    gfs_id: str | type[TypeError] = (
-        str(result.get("gfs_id")) if result is not None else TypeError
-    )
-    if isinstance(gfs_id, str):
-        return gfs_id
-    else:
-        raise TypeError(
-            f"gfs_id was not a string.\n\nValue of gfs_id: {gfs_id}\n\nType of gfs_id {type(gfs_id)}"
-        )
+    return result.get("gfs_id")
 
 
 def get_requested_file_gfs_id_yaml(target_id):
@@ -77,7 +68,7 @@ def get_requested_file_gfs_id_yaml(target_id):
         }
     )
     print(result)
-    gfs_id = result.get("gfs_id")
+    gfs_id = result.get("gfs_id", {})
     return gfs_id
 
 
@@ -92,9 +83,12 @@ def get_requested_file_gfs_id_json(target_id):
             "metadata.firework_name": "marker_on_pdf",
         }
     )
-    print(result)
-    gfs_id = result.get("gfs_id")
-    return gfs_id
+    if isinstance(result, dict):
+        print(result)
+        gfs_id = result.get("gfs_id")
+        return gfs_id
+    else:
+        logger.info("Could not find JSON Documents!")
 
 
 def get_requested_file_gfs_id_pngs(target_id):
