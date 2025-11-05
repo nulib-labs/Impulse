@@ -1,5 +1,8 @@
 # Impulse
 
+Digitization will deliver unprocessed files, I will do binarization/all that jazz
+Pass it back to Digitization, they will do limb, METSXML stuff, and then they pass it back and do OCR
+
 Impulse is a high-performance computing workflow manager designed primarily for running Deep Learning Document Models on Digitized Documents for Libraries and Cultural Heritage Institutions. It works on many image formats.
 
 General architecture
