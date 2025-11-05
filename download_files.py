@@ -163,14 +163,14 @@ def get_filecontents_and_doc(gfs_id):
 if __name__ == "__main__":
     logger.info(f"Looking for files with accession number {accession_number}")
     gfs_id = get_requested_file_gfs_id_pdf(accession_number)
-    yaml_file = get_requested_file_gfs_id_yaml(accession_number)
-    print(yaml_file)
-    file_contents, doc = get_filecontents_and_doc(gfs_id)
-    save_file(file_contents, doc, "meta.yaml")
-    file_contents, doc = get_filecontents_and_doc(gfs_id)
-
-    if file_contents is not None and doc is not None:
-        save_file(file_contents, doc, output_file if output_file else "output.pdf")
+    try:
+        yaml_file = get_requested_file_gfs_id_yaml(accession_number)
+        file_contents, doc = get_filecontents_and_doc(yaml_file)
+        save_file(file_contents, doc, "meta.yaml")
+        if file_contents is not None and doc is not None:
+            save_file(file_contents, doc, output_file if output_file else "output.pdf")
+    except:
+        print("No YAML file found!")
     gfs_ids = get_requested_file_gfs_id_pngs(accession_number)
     for gfs_id, original_file_name in gfs_ids:
         file_contents, doc = get_filecontents_and_doc(gfs_id)

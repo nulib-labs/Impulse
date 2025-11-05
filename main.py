@@ -117,7 +117,7 @@ else:
                     "accession_number": accession_number,
                 },
             )
-            xml_identifier = new_identifier
+            xml_identifier = file_id
     if xml_identifier is not None:
         spec = {
             "identifiers": identifiers,
@@ -129,6 +129,7 @@ else:
         spec = {"identifiers": identifiers, "accession_number": accession_number}
 
     if xml_identifier is not None:
+        print(xml_identifier)
         fw = Firework(
             [
                 PyTask(

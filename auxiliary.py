@@ -111,8 +111,8 @@ def convert_mets_to_yml(*args):
     gfs_id = args[0]
     accession_number = args[1]
     # === Step 1: Get XML contents from GridFS ===
-    file_contents, doc = fp.get_file(gfs_id)
-
+    file_contents, doc = fp.get_file_by_id(gfs_id)
+    print(file_contents)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp_xml:
         tmp_xml.write(file_contents)
         tmp_xml_path = tmp_xml.name
@@ -256,6 +256,7 @@ def convert_mets_to_yml(*args):
             yaml_lines.append("    " + line)
 
     # === Step 5: Write YAML to temp file ===
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".yml") as tmp_yml:
         tmp_yml.write("\n".join(yaml_lines).encode("utf-8"))
         tmp_yml_path = tmp_yml.name
@@ -451,6 +452,7 @@ def marker_on_pdf(*args):
     # Save it to current dir for inspection test
     with open(f"debug_{safe_id}.pdf", "wb") as dbg:
         dbg.write(file_contents)
+
     # Run Marker on PDF via Python API
     config = {
         "output_format": "json",
