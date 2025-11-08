@@ -1,14 +1,9 @@
 import argparse
 import pathlib
-from fireworks.core.firework import Firework
-from fireworks.core.launchpad import LaunchPad, Workflow
-from fireworks.user_objects.firetasks.script_task import PyTask
-from fireworks.utilities.filepad import FilePad
+from fireworks.core.launchpad import Workflow
 from loguru import logger
 import ocr_fireworks
 from cli_helpers import list_image_files_in_dir, get_fireworks_data
-from tqdm import tqdm
-import os
 
 
 def submit_image_processing_job_subcommand(args):
@@ -19,6 +14,8 @@ def submit_image_processing_job_subcommand(args):
     logger.info(f"Detected primary_key value of: {args.primary_key}")
 
     x = list_image_files_in_dir(args.input)
+    logger.info(x)
+    logger.info(f"Type of x: {type(x)}")
     logger.info(f"Found {len(x)} image-type files in {args.input}")
     fw = ocr_fireworks.define_firework("name", {}, x)
     print(fw)
@@ -55,11 +52,10 @@ def main():
     ip.add_argument("--primary_key", "-pk", type=str)
     ip.set_defaults(func=submit_image_processing_job_subcommand)
 
-    # ocr subcommand
-    ocr = jobtypes.add_parser("ocr")
-    ocr.set_defaults(func=submit_ocr_job_subcommand)
-
-    args = parser.parse_args()
+    submit.set_defaults(func=submit_image_processing_job_subcommand)
+    args = parser.parse_args(
+        "submit image_processing -i ./pilot_test_data/p1074_35556031825029/".split()
+    )
     args.func(args)
 
 
