@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 JSONLike = dict[str, dict[str, str]]
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--accession_number",
@@ -26,7 +27,6 @@ accession_number: str = args.accession_number
 output_file: str = args.output_file
 
 url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
-
 OUTPUT_DIR = f"downloaded_files/{accession_number}"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -43,17 +43,24 @@ def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
     `get_requested_file_gfs_id_pdf`
     """
 
-    client = MongoClient(url)
-
-    db = client["fireworks"]
+    try:
+        client = MongoClient(url)
+        db = client["fireworks"]
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoClient.\n{e}")
+        raise e
     filepad_col = db["filepad"]
+    result: dict | None
     result = filepad_col.find_one(
         {
             "metadata.accession_number": accession_number,
             "metadata.firework_name": "image_to_pdf",
         }
     )
-    return result.get("gfs_id")
+    if isinstance(result, dict):
+        return result.get("gfs_id")
+    else:
+        return None
 
 
 def get_requested_file_gfs_id_yaml(target_id):
@@ -152,7 +159,6 @@ def get_filecontents_and_doc(gfs_id):
         host=conn_str + "/fireworks?",
         port=27017,
         uri_mode=True,
-        database="fireworks",
         mongoclient_kwargs=get_mongo_client_kwargs(),
     )
 
