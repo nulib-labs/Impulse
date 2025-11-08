@@ -90,15 +90,13 @@ lp = LaunchPad(
     port=27017,
     uri_mode=True,
     name="fireworks",
-    mongoclient_kwargs=get_mongo_client_kwargs(),
+    logdir="./logs",
 )
-
 fp = FilePad(
-    host=conn_str,
+    host=(conn_str + "/fireworks?"),
     port=27017,
     uri_mode=True,
     database="fireworks",
-    mongoclient_kwargs=get_mongo_client_kwargs(),
 )
 
 

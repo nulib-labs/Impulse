@@ -1,3 +1,4 @@
+from pathlib import PosixPath
 from fireworks.core.firework import Firework
 from fireworks.core.launchpad import LaunchPad
 from fireworks.user_objects.firetasks.script_task import PyTask
@@ -7,7 +8,7 @@ from fireworks.utilities.filepad import FilePad
 from tqdm import tqdm
 
 
-def define_spec(accession_number, files):
+def define_image_processing_spec(accession_number, files):
     conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
     lp = LaunchPad(
         host=conn_str,
@@ -27,14 +28,16 @@ def define_spec(accession_number, files):
     print(files)
     identifiers = []
     for f in tqdm(sorted(files), desc="Uploading files..."):
-        name = f
-        new_identifier = str(accession_number) + "_" + str(name).zfill(10)
+        f: PosixPath
+        absolute_path = str(f)
+        filename = str(f.name)
+        new_identifier = str(accession_number) + "_" + str(filename).zfill(10)
         file_id, _ = fp.add_file(
             f,
             identifier=new_identifier,
             metadata={
-                "source_path": f,
-                "filename": name,
+                "source_path": absolute_path,
+                "filename": filename,
                 "accession_number": accession_number,
             },
         )
@@ -47,7 +50,7 @@ def define_spec(accession_number, files):
     return spec
 
 
-def define_firework(name: str, spec: dict, files: list):
+def define_image_processing_firework(name: str, spec: dict, files: list):
     fw = Firework(
         [
             PyTask(
@@ -60,7 +63,7 @@ def define_firework(name: str, spec: dict, files: list):
             ),
         ],
         name="",
-        spec=define_spec("XXXX", files),
+        spec=define_image_processing_spec("XXXX", files),
     )
 
     return fw

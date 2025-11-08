@@ -17,7 +17,7 @@ def submit_image_processing_job_subcommand(args):
     logger.info(x)
     logger.info(f"Type of x: {type(x)}")
     logger.info(f"Found {len(x)} image-type files in {args.input}")
-    fw = ocr_fireworks.define_firework("name", {}, x)
+    fw = ocr_fireworks.define_image_processing_firework("name", {}, x)
     print(fw)
     wf = Workflow(
         [fw], metadata={"accession_number": args.primary_key}, name=args.primary_key
@@ -29,6 +29,7 @@ def submit_image_processing_job_subcommand(args):
 
 def submit_ocr_job_subcommand(args):
     logger.info("Submitting OCR job")
+    fw_data = get_fireworks_data()
     return None
 
 
