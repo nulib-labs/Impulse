@@ -165,7 +165,7 @@ else:
             [fw], metadata={"accession_number": accession_number}, name=accession_number
         )
     else:
-        fw = Firework(
+        fw1 = Firework(
             [
                 PyTask(
                     func="auxiliary.image_conversion_task",
@@ -175,21 +175,37 @@ else:
                     ],
                     outputs="converted_images",
                 ),
+            ],
+            name=f"Image Conversion Task: {accession_number}",
+            spec=spec,
+        )
+        fw2 = Firework(
+            [
                 PyTask(
                     func="auxiliary.image_to_pdf",
                     inputs=["converted_images", "accession_number"],
                     outputs="PDF_id",
                 ),
+            ],
+            name=f"Image to PDF: {accession_number}",
+            spec=spec,
+        )
+
+        fw3 = Firework(
+            [
                 PyTask(
                     func="auxiliary.marker_on_pdf",
                     inputs=["PDF_id", "accession_number"],
                 ),
             ],
-            name=fw_name,
+            name=f"OCR PDF: {accession_number}",
             spec=spec,
         )
         wf = Workflow(
-            [fw], metadata={"accession_number": accession_number}, name=accession_number
+            [fw1, fw2, fw3],
+            {fw1: [fw2], fw2: [fw3]},
+            metadata={"accession_number": accession_number},
+            name=accession_number,
         )
 
     lp.add_wf(wf)
