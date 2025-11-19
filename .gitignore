@@ -1,7 +1,7 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
+Nbuild/
 dist/
 wheels/
 *.egg-info
@@ -34,3 +34,4 @@ fabfile.py
 FW_submit.script
 pilot_test_data/
 *.pkl
+logdir

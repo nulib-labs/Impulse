@@ -21,13 +21,13 @@ parser.add_argument(
     action="store_true",
 )
 
-parser.add_argument(
+_ = parser.add_argument(
     "--accession_number",
     "-a",
     help="The identifier for which the files should be linked. This should be a barcode.",
 )
 
-parser.add_argument(
+_ = parser.add_argument(
     "--fw_name",
     "-n",
     help="A custom name of the workflow. If no argument is passed, defaults to value of --identifier",
