@@ -20,6 +20,7 @@ dependencies = [
     "pypdf2>=3.0.1",
     "python-doctr>=1.0.0",
     "sentence-transformers>=5.1.1",
+    "smbprotocol[kerberos]>=1.15.0",
     "transformers>=4.57.0",
     "woolworm>=0.0.9",
 ]

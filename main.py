@@ -42,7 +42,6 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-
 input_path = args.input
 accession_number = args.accession_number
 is_recursive = args.recursive
@@ -50,7 +49,9 @@ fw_name = args.fw_name
 do_reset = args.reset
 
 
-conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+conn_str = str(
+    "mongodb+srv://aerithnetzer:162253Warlock!@ocr-development.poelxty.mongodb.net"
+)
 lp = LaunchPad(
     host=conn_str,
     port=27017,
@@ -59,7 +60,7 @@ lp = LaunchPad(
     logdir="./logs",
 )
 fp = FilePad(
-    host=(conn_str + "/fireworks?"),
+    host=conn_str,
     port=27017,
     uri_mode=True,
     database="fireworks",
