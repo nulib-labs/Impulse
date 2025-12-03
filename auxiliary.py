@@ -1,4 +1,3 @@
-from typing_extensions import deprecated
 from uuid import uuid4
 from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import os
@@ -20,9 +19,16 @@ import math
 from typing import Union, Tuple
 from deskew import determine_skew
 import lxml.etree as ET
+from loguru import logger
+from pymongo import MongoClient
+import boto3
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+
+url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
+
+s3 = boto3.client("s3")
 
 
 def rotate(
@@ -315,6 +321,12 @@ def image_conversion_task(*args):
         tmp_dir = tempfile.gettempdir()
         filename = os.path.join(tmp_dir, suffix)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
+
+        s3.upload_fileobj(
+            encoded_img.tobytes(),
+            "environmental-impact-statements-data",
+            f"{accession_number}/PNG/{suffix}",
+        )
         with open(filename, "wb") as tmp_file:
             tmp_file.write(encoded_img.tobytes())
             tmp_path = tmp_file.name
@@ -470,8 +482,14 @@ def marker_on_pdf(*args):
     try:
         rendered: JSONOutput
         rendered = converter(temp_pdf_path)
-
+        suffix=
         # Persist rendered JSON via a secure temp file (avoid cluttering CWD)
+        s3.upload_fileobj(
+            rendered,
+            "environmental-impact-statements-data",
+            f"{accession_number}/schema.json",
+        )
+
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
         ) as tmp_json:
@@ -499,3 +517,94 @@ def marker_on_pdf(*args):
         )
 
     return FWAction(update_spec={"marker_output": rendered}, stored_data={})
+
+
+def get_requested_file_gfs_id_yaml(target_id):
+    client = MongoClient(url)
+
+    db = client["fireworks"]
+    filepad_col = db["filepad"]
+    result = filepad_col.find_one(
+        {
+            "metadata.accession_number": target_id,
+            "metadata.firework_name": "convert_mets_to_yml",
+        }
+    )
+    print(result)
+    gfs_id = result.get("gfs_id", {})
+    return gfs_id
+
+
+def get_requested_file_gfs_id_json(target_id):
+    client = MongoClient(url)
+
+    db = client["fireworks"]
+    filepad_col = db["filepad"]
+    result = filepad_col.find_one(
+        {
+            "metadata.accession_number": target_id,
+            "metadata.firework_name": "marker_on_pdf",
+        }
+    )
+    if isinstance(result, dict):
+        print(result)
+        gfs_id = result.get("gfs_id")
+        return gfs_id
+    else:
+        logger.info("Could not find JSON Documents!")
+
+
+def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
+    """
+    `get_requested_file_gfs_id_pdf`
+    """
+
+    client = MongoClient(url)
+
+    db = client["fireworks"]
+    filepad_col = db["filepad"]
+    result = filepad_col.find_one(
+        {
+            "metadata.accession_number": accession_number,
+            "metadata.firework_name": "image_to_pdf",
+        }
+    )
+    return result.get("gfs_id")
+
+
+def get_requested_file_gfs_id_pngs(target_id):
+    client = MongoClient(url)
+
+    db = client["fireworks"]
+    filepad_col = db["filepad"]
+    result = filepad_col.find(
+        {
+            "metadata.accession_number": target_id,
+            "metadata.firework_name": "image_conversion",
+        }
+    )
+    print(result)
+    gfs_ids = []
+    for doc in result:
+        gfs_id = doc.get("gfs_id")
+        gfs_ids.append((gfs_id, doc.get("original_file_name", "")))
+    return gfs_ids
+
+
+def upload_file_to_s3(file_contents, doc, s3_path):
+    # Ensure doc and file_contents are not None before proceeding
+    if doc is not None and file_contents is not None:
+        output_path = s3_path
+        with open(output_path, "wb") as f:
+            f.write(file_contents)
+    else:
+        print("File or document not found.")
+
+
+def dump_data_to_s3(accession_number: str):
+    client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+    db = client["fireworks"]
+    coll = db["filepad"]
+    gfs_id = get_requested_file_gfs_id_pdf(accession_number)
+
+    return FWAction(update_spec=None, stored_data=None)

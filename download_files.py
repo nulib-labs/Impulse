@@ -152,7 +152,6 @@ def get_filecontents_and_doc(gfs_id):
         host=conn_str + "/fireworks?",
         port=27017,
         uri_mode=True,
-        database="fireworks",
         mongoclient_kwargs=get_mongo_client_kwargs(),
     )
 

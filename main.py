@@ -59,10 +59,10 @@ lp = LaunchPad(
     logdir="./logs",
 )
 fp = FilePad(
-    host=(conn_str + "/fireworks?"),
+    host=conn_str,
     port=27017,
     uri_mode=True,
-    database="fireworks",
+    logdir="./logs",
 )
 
 if do_reset:
