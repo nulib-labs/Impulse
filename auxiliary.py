@@ -1,4 +1,5 @@
 from uuid import uuid4
+import PIL
 from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import os
 from fireworks.utilities.filepad import FilePad
@@ -22,6 +23,9 @@ import lxml.etree as ET
 from loguru import logger
 from pymongo import MongoClient
 import boto3
+from surya.foundation import FoundationPredictor
+from surya.recognition import RecognitionPredictor
+from surya.detection import DetectionPredictor
 
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -100,10 +104,10 @@ lp = LaunchPad(
 )
 
 fp = FilePad(
-    host=conn_str + "/fireworks?",
+    host=conn_str,
     port=27017,
+    name="fireworks",
     uri_mode=True,
-    database="fireworks",
     mongoclient_kwargs=get_mongo_client_kwargs(),
 )
 
@@ -391,6 +395,38 @@ def image_to_pdf(*args):
     )
 
 
+def marker_on_image(*args):
+    """
+    Adds a marker to each page of a PDF.
+    args[0] = GridFS file ID of the PDF (may be nested)
+    args[1] = optional barcode_dir (not used here)
+    """
+    from PIL import Image
+    from io import BytesIO
+
+    image_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
+    accession_number = args[1]
+    file_contents, doc = fp.get_file(image_id)
+    print(doc)
+    logger.debug(f"Type of file content: {type(file_contents)}")
+    logger.info("Successfully called doc")
+
+    config = {
+        "output_format": "json",
+        "paginate_output": True,
+    }
+
+    config_parser = ConfigParser(config)
+    foundation_predictor = FoundationPredictor()
+    recognition_predictor = RecognitionPredictor(foundation_predictor)
+    detection_predictor = DetectionPredictor()
+    predictions = recognition_predictor(
+        [Image.open(BytesIO(file_contents))], det_predictor=detection_predictor
+    )
+    logger.debug(f"Type of OCR Result: {type(predictions[0])}")
+    return FWAction(update_spec={"marker_output": predictions}, stored_data={})
+
+
 def marker_on_pdf(*args):
     """
     Adds a marker to each page of a PDF.
@@ -482,7 +518,6 @@ def marker_on_pdf(*args):
     try:
         rendered: JSONOutput
         rendered = converter(temp_pdf_path)
-        suffix=
         # Persist rendered JSON via a secure temp file (avoid cluttering CWD)
         s3.upload_fileobj(
             rendered,
@@ -570,6 +605,10 @@ def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
         }
     )
     return result.get("gfs_id")
+
+
+def create_ingest_sheet():
+    import pandas as pd
 
 
 def get_requested_file_gfs_id_pngs(target_id):

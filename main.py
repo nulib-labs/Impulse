@@ -74,7 +74,6 @@ suffixes = ["jpg", "png", "jpeg", "tiff", "jp2", "xml"]
 files = []
 
 if is_recursive:
-    print(suffixes)
     for suffix in suffixes:
         files.extend(
             glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
@@ -84,7 +83,6 @@ if is_recursive:
     pass
 
 else:
-    print(suffixes)
     for suffix in suffixes:
         files.extend(
             glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
@@ -129,83 +127,42 @@ else:
         spec = {"identifiers": identifiers, "accession_number": accession_number}
 
     if xml_identifier is not None:
-        print(xml_identifier)
-        fw = Firework(
-            [
+        marker_ocr_tasks = []
+        for identifier in spec["identifiers"]:
+            marker_ocr_tasks.append(
                 PyTask(
-                    func="auxiliary.convert_mets_to_yml",
-                    inputs=[
-                        "xml_identifier",
-                        "accession_number",
-                    ],
-                    outputs="yaml_file",
-                ),
-                PyTask(
-                    func="auxiliary.image_conversion_task",
-                    inputs=[
-                        "identifiers",
-                        "accession_number",
-                    ],
+                    func="auxiliary.marker_on_image",
+                    inputs=["identifier", "accession_number"],
                     outputs="converted_images",
-                ),
-                PyTask(
-                    func="auxiliary.image_to_pdf",
-                    inputs=["converted_images", "accession_number"],
-                    outputs="PDF_id",
-                ),
-                PyTask(
-                    func="auxiliary.marker_on_pdf",
-                    inputs=["PDF_id", "accession_number"],
-                ),
-            ],
-            name=fw_name,
-            spec=spec,
-        )
+                )
+            )
+        fw1 = Firework(tasks=marker_ocr_tasks)
+        wf = Workflow(fireworks=[fw1])
         wf = Workflow(
-            [fw], metadata={"accession_number": accession_number}, name=accession_number
-        )
-    else:
-        fw1 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.image_conversion_task",
-                    inputs=[
-                        "identifiers",
-                        "accession_number",
-                    ],
-                    outputs="converted_images",
-                ),
-            ],
-            name=f"Image Conversion Task: {accession_number}",
-            spec=spec,
-        )
-        fw2 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.image_to_pdf",
-                    inputs=["converted_images", "accession_number"],
-                    outputs="PDF_id",
-                ),
-            ],
-            name=f"Image to PDF: {accession_number}",
-            spec=spec,
-        )
-
-        fw3 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.marker_on_pdf",
-                    inputs=["PDF_id", "accession_number"],
-                ),
-            ],
-            name=f"OCR PDF: {accession_number}",
-            spec=spec,
-        )
-        wf = Workflow(
-            [fw1, fw2, fw3],
-            {fw1: [fw2], fw2: [fw3]},
+            [fw1],
             metadata={"accession_number": accession_number},
             name=accession_number,
+            links_dict=None,
+        )
+    else:
+        marker_ocr_tasks = []
+        for identifier in identifiers:
+            marker_ocr_tasks.append(
+                PyTask(
+                    func="auxiliary.marker_on_image",
+                    inputs=["identifier", "accession_number"],
+                    outputs="page_schema",
+                    spec={
+                        "identifier": identifier,
+                        "accession_number": accession_number,
+                    },
+                )
+            )
+        fw1 = Firework(
+            tasks=marker_ocr_tasks,
+            name=accession_number,
+            spec={"identifier": identifier, "accession_number": accession_number},
         )
 
-    lp.add_wf(wf)
+        wf = Workflow(fireworks=[fw1], name="My test")
+        lp.add_wf(wf)
