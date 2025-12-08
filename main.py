@@ -57,13 +57,11 @@ lp = LaunchPad(
     port=27017,
     uri_mode=True,
     name="fireworks",
-    logdir="./logs",
 )
 fp = FilePad(
     host=conn_str,
     port=27017,
     uri_mode=True,
-    logdir="./logs",
 )
 
 if do_reset:
@@ -98,7 +96,7 @@ else:
         logger.info(f"Value of new identifier: {new_identifier}")
         print(new_identifier)
         if not f.endswith(".xml"):
-            file_id, _ = fp.add_file(
+            file_id, doc = fp.add_file(
                 f,
                 identifier=new_identifier,
                 metadata={
@@ -107,10 +105,11 @@ else:
                     "accession_number": accession_number,
                 },
             )
-            identifiers.append(new_identifier)
+            identifiers.append((file_id, doc))
+            logger.info(f"File {f} uploaded. file_id: {file_id}; doc: {doc}")
         else:
             print("Found metadata xml file:")
-            file_id, _ = fp.add_file(
+            file_id, doc = fp.add_file(
                 f,
                 identifier=new_identifier,
                 metadata={
@@ -119,6 +118,7 @@ else:
                     "accession_number": accession_number,
                 },
             )
+            logger.info(f"File {f} uploaded. file_id: {file_id}; doc: {doc}")
             xml_identifier = file_id
     if xml_identifier is not None:
         spec = {
@@ -135,7 +135,7 @@ else:
         for identifier in spec["identifiers"]:
             marker_ocr_tasks.append(
                 PyTask(
-                    func="auxiliary.marker_on_image",
+                    func="auxiliary.surya_on_image",
                     inputs=["identifier", "accession_number"],
                     outputs="converted_images",
                 )
@@ -170,7 +170,7 @@ else:
 
             # Second task: marker OCR (uses output from conversion_task)
             marker_task = PyTask(
-                func="auxiliary.marker_on_image",
+                func="auxiliary.surya_on_image",
                 inputs=[
                     "converted_images",
                     "accession_number",

@@ -291,63 +291,64 @@ def convert_mets_to_yml(*args):
 
 
 def image_conversion_task(*args):
-    identifier = args[0]
+    logger.info(f"Value of args: {args}")
+    logger.info(f"Value of args[0]: {args[0]}")
+    logger.info(f"Value of args[1]: {args[1]}")
+    gfs_id = args[0][0][1]
+    file_name = args[0][0]
+    logger.info(f"Now running on image_id: {gfs_id, file_name}")
     accession_number = args[1]
-    identifier_out = []
-    i = 1
-    for file_id in tqdm(identifier, desc="Processing images"):
-        # Get raw file bytes
-        file_contents, doc = fp.get_file(file_id)
+    file_contents, doc = fp.get_file(gfs_id)
+    logger.info(
+        f"Running `image_conversion_task` on {file_name}, with accession number {accession_number}"
+    )
 
-        # Convert bytes -> numpy array -> OpenCV image
-        nparr = np.frombuffer(file_contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    # Get raw file bytes
+    file_contents, doc = fp.get_file(gfs_id)
 
-        grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        angle = determine_skew(grayscale)
-        rotated = rotate(img, angle, (255, 255, 255))
+    # Convert bytes -> numpy array -> OpenCV image
+    nparr = np.frombuffer(file_contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # Check if image was loaded successfully
-        if img is None:
-            print(f"Failed to load image: {file_id}")
-            continue
+    grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    angle = determine_skew(grayscale)
+    rotated = rotate(img, angle, (255, 255, 255))
 
-        # Process the image
-        processed_img = process_historical_document(rotated)
-        # Now you can save or use the processed image
-        # For example, encode back to bytes if needed:
+    # Process the image
+    processed_img = process_historical_document(rotated)
+    # Now you can save or use the processed image
+    # For example, encode back to bytes if needed:
 
-        success, encoded_img = cv2.imencode(".png", processed_img)
-        if not success:
-            raise ValueError("Failed to encode image")
-        suffix = f"{accession_number}_{i:010d}.png"
-        # Save processed image to a temporary file
-        tmp_dir = tempfile.gettempdir()
-        filename = os.path.join(tmp_dir, suffix)
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+    success, encoded_img = cv2.imencode(".png", processed_img)
+    if not success:
+        raise ValueError("Failed to encode image")
+    suffix = f"{accession_number}_{file_name}.png"
+    # Save processed image to a temporary file
+    tmp_dir = tempfile.gettempdir()
+    filename = os.path.join(tmp_dir, suffix)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    logger.info(f"Now uploading encoded image {filename} to S3. DUMMY")
+    # s3.upload_fileobj(
+    #     io.BytesIO(encoded_img.tobytes()),
+    #     "environmental-impact-statements-data",
+    #     f"{accession_number}/PNG/{suffix}",
+    # )
+    with open(filename, "wb") as tmp_file:
+        tmp_file.write(encoded_img.tobytes())
+        tmp_path = tmp_file.name
+        print(tmp_path)
 
-        s3.upload_fileobj(
-            encoded_img.tobytes(),
-            "environmental-impact-statements-data",
-            f"{accession_number}/PNG/{suffix}",
-        )
-        with open(filename, "wb") as tmp_file:
-            tmp_file.write(encoded_img.tobytes())
-            tmp_path = tmp_file.name
-            print(tmp_path)
+    # Add file to your file manager / database
+    file_id, identifier = fp.add_file(
+        tmp_path,
+        identifier=str(uuid4()),
+        metadata={
+            "firework_name": "image_conversion",
+            "accession_number": accession_number,
+        },
+    )  # adjust this to your API
 
-        # Add file to your file manager / database
-        file_id, identifier = fp.add_file(
-            tmp_path,
-            identifier=str(uuid4()),
-            metadata={
-                "firework_name": "image_conversion",
-                "accession_number": accession_number,
-            },
-        )  # adjust this to your API
-        identifier_out.append(identifier)
-        i += 1
-    return FWAction(update_spec={"converted_images": identifier_out})
+    return FWAction(update_spec={"converted_images": identifier})
 
 
 def image_to_pdf(*args):
@@ -395,7 +396,7 @@ def image_to_pdf(*args):
     )
 
 
-def marker_on_image(*args):
+def surya_on_image(*args):
     """
     Adds a marker to each page of a PDF.
     args[0] = GridFS file ID of the PDF (may be nested)
@@ -407,11 +408,16 @@ def marker_on_image(*args):
     client = MongoClient(url)
     db = client["fireworks"]
     coll = db["pages"]
-    image_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
-    logger.info(f"Now running on image_id: {image_id}")
+
+    logger.info(f"Value of args: {args}")
+    logger.info(f"Value of args[0]: {args[0]}")
+    logger.info(f"Value of args[1]: {args[1]}")
+    gfs_id = args[0]
+    file_name = args[0][0]
+
+    logger.info(f"Now running on image_id: {gfs_id, file_name}")
     accession_number = args[1]
-    file_contents, doc = fp.get_file(image_id)
-    print(doc)
+    file_contents, doc = fp.get_file(gfs_id)
     logger.debug(f"Type of file content: {type(file_contents)}")
     logger.info("Successfully called doc")
 
@@ -534,11 +540,13 @@ def marker_on_pdf(*args):
         rendered: JSONOutput
         rendered = converter(temp_pdf_path)
         # Persist rendered JSON via a secure temp file (avoid cluttering CWD)
-        s3.upload_fileobj(
-            rendered,
-            "environmental-impact-statements-data",
-            f"{accession_number}/schema.json",
-        )
+
+        logger.info("Now uploading 'schema.json' to S3 DUMMY")
+        # s3.upload_fileobj(
+        #     rendered,
+        #     "environmental-impact-statements-data",
+        #     f"{accession_number}/schema.json",
+        # )
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
