@@ -24,7 +24,7 @@ from loguru import logger
 from pymongo import MongoClient
 import boto3
 from surya.foundation import FoundationPredictor
-from surya.recognition import RecognitionPredictor
+from surya.recognition import RecognitionPredictor, prediction_to_polygon_batch
 from surya.detection import DetectionPredictor
 
 conn_str: str
@@ -291,11 +291,11 @@ def convert_mets_to_yml(*args):
 
 
 def image_conversion_task(*args):
-    identifiers = args[0]
+    identifier = args[0]
     accession_number = args[1]
-    identifiers_out = []
+    identifier_out = []
     i = 1
-    for file_id in tqdm(identifiers, desc="Processing images"):
+    for file_id in tqdm(identifier, desc="Processing images"):
         # Get raw file bytes
         file_contents, doc = fp.get_file(file_id)
 
@@ -345,9 +345,9 @@ def image_conversion_task(*args):
                 "accession_number": accession_number,
             },
         )  # adjust this to your API
-        identifiers_out.append(identifier)
+        identifier_out.append(identifier)
         i += 1
-    return FWAction(update_spec={"converted_images": identifiers_out})
+    return FWAction(update_spec={"converted_images": identifier_out})
 
 
 def image_to_pdf(*args):
@@ -404,7 +404,11 @@ def marker_on_image(*args):
     from PIL import Image
     from io import BytesIO
 
+    client = MongoClient(url)
+    db = client["fireworks"]
+    coll = db["pages"]
     image_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
+    logger.info(f"Now running on image_id: {image_id}")
     accession_number = args[1]
     file_contents, doc = fp.get_file(image_id)
     print(doc)
@@ -423,7 +427,18 @@ def marker_on_image(*args):
     predictions = recognition_predictor(
         [Image.open(BytesIO(file_contents))], det_predictor=detection_predictor
     )
-    logger.debug(f"Type of OCR Result: {type(predictions[0])}")
+    results = []
+    import json
+
+    text_lines = []
+    print(len(predictions))
+    for i, prediction in enumerate(predictions):
+        data = prediction.model_dump()
+        data["accession_number"] = accession_number
+        coll.insert_one(data)
+        for i in data["text_lines"]:
+            print(i["text"])
+    print(text_lines)
     return FWAction(update_spec={"marker_output": predictions}, stored_data={})
 
 
