@@ -24,20 +24,27 @@ from loguru import logger
 from pymongo import MongoClient
 import boto3
 from surya.foundation import FoundationPredictor
-from surya.recognition import RecognitionPredictor, prediction_to_polygon_batch
+from surya.recognition import RecognitionPredictor
 from surya.detection import DetectionPredictor
+from my_pads import fp, lp
 
+# Global vars
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
-
 url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
-
 s3 = boto3.client("s3")
 
 
 def rotate(
-    image: np.ndarray, angle: float, background: Union[int, Tuple[int, int, int]]
+    image: np.ndarray,
+    angle: float,
+    background: Union[int, Tuple[int, int, int]]
 ) -> np.ndarray:
+    """
+    Rotates an OpenCV image according to an angle,
+    fills background with a color as necessary.
+    """
+
     old_width, old_height = image.shape[:2]
     angle_radian = math.radians(angle)
     width = abs(np.sin(angle_radian) * old_height) + abs(
@@ -51,8 +58,13 @@ def rotate(
     rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
     rot_mat[1, 2] += (width - old_width) / 2
     rot_mat[0, 2] += (height - old_height) / 2
+
     return cv2.warpAffine(
-        image, rot_mat, (int(round(height)), int(round(width))), borderValue=background
+        image,
+        rot_mat,
+        (int(round(height)),
+         int(round(width))),
+        borderValue=background
     )
 
 
@@ -72,11 +84,13 @@ def process_historical_document(image_np):
     dst = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
 
     # Otsu’s thresholding (black text on white)
-    otsu_thresh, _ = cv2.threshold(dst, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    otsu_thresh, _ = cv2.threshold(
+        dst, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     adjusted_thresh = otsu_thresh * 1.2
     _, binary = cv2.threshold(dst, adjusted_thresh, 255, cv2.THRESH_BINARY)
     # (Optional) Diagnostic printouts — can be removed
-    foreground_ratio = np.sum(binary == 0) / binary.size  # proportion of dark pixels
+    # proportion of dark pixels
+    foreground_ratio = np.sum(binary == 0) / binary.size
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
     sizes = stats[1:, cv2.CC_STAT_AREA]
     large_components = sizes[sizes > 50]
@@ -93,23 +107,6 @@ def get_mongo_client_kwargs():
         "tls": True,
         "tlsCAFile": certifi.where(),
     }
-
-
-lp = LaunchPad(
-    host=conn_str,
-    port=27017,
-    uri_mode=True,
-    name="fireworks",
-    mongoclient_kwargs=get_mongo_client_kwargs(),
-)
-
-fp = FilePad(
-    host=conn_str,
-    port=27017,
-    name="fireworks",
-    uri_mode=True,
-    mongoclient_kwargs=get_mongo_client_kwargs(),
-)
 
 
 def convert_mets_to_yml(*args):
@@ -142,7 +139,8 @@ def convert_mets_to_yml(*args):
     }
 
     def find_filename_by_file_id(file_id):
-        node = root.xpath(f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns)
+        node = root.xpath(
+            f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns)
         if not node:
             return None
         href = node[0].get("{http://www.w3.org/1999/xlink}href", "")
@@ -150,7 +148,8 @@ def convert_mets_to_yml(*args):
 
     # === Step 3: Extract header information ===
     mets_hdr = root.xpath("//xmlns:metsHdr", namespaces=ns)
-    capture_date = mets_hdr[0].get("CREATEDATE") + "-06:00" if mets_hdr else None
+    capture_date = mets_hdr[0].get(
+        "CREATEDATE") + "-06:00" if mets_hdr else None
 
     suprascan = False
     scanning_order_rtl = False
@@ -173,10 +172,12 @@ def convert_mets_to_yml(*args):
     yaml_lines.append("image_compression_agent: northwestern")
     yaml_lines.append('image_compression_tool: ["LIMB v4.5.0.0"]')
     yaml_lines.append(
-        f"scanning_order: {'right-to-left' if scanning_order_rtl else 'left-to-right'}"
+        f"scanning_order: {
+            'right-to-left' if scanning_order_rtl else 'left-to-right'}"
     )
     yaml_lines.append(
-        f"reading_order: {'right-to-left' if reading_order_rtl else 'left-to-right'}"
+        f"reading_order: {
+            'right-to-left' if reading_order_rtl else 'left-to-right'}"
     )
     yaml_lines.append("pagedata:")
 
@@ -300,7 +301,9 @@ def image_conversion_task(*args):
     accession_number = args[1]
     file_contents, doc = fp.get_file(gfs_id)
     logger.info(
-        f"Running `image_conversion_task` on {file_name}, with accession number {accession_number}"
+        f"Running `image_conversion_task` on {file_name}, with accession number {
+            accession_number
+        }"
     )
 
     # Get raw file bytes
@@ -485,7 +488,8 @@ def marker_on_pdf(*args):
                 )
 
     if not isinstance(file_contents, (bytes, bytearray)):
-        raise TypeError(f"Unexpected file_contents type: {type(file_contents)}")
+        raise TypeError(f"Unexpected file_contents type: {
+                        type(file_contents)}")
 
     # Dump raw retrieved bytes for inspection (even if empty / invalid)
     safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(pdf_id))[:60]
@@ -497,7 +501,9 @@ def marker_on_pdf(*args):
         with open(debug_name, "wb") as dbg:
             dbg.write(file_contents)
         logging.info(
-            f"Wrote raw retrieved file to {os.path.abspath(debug_name)} (size={len(file_contents)})"
+            f"Wrote raw retrieved file to {os.path.abspath(debug_name)} (size={
+                len(file_contents)
+            })"
         )
     except Exception as e:
         logging.warning(f"Failed writing debug file {debug_name}: {e}")
@@ -630,10 +636,6 @@ def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
     return result.get("gfs_id")
 
 
-def create_ingest_sheet():
-    import pandas as pd
-
-
 def get_requested_file_gfs_id_pngs(target_id):
     client = MongoClient(url)
 
@@ -651,22 +653,3 @@ def get_requested_file_gfs_id_pngs(target_id):
         gfs_id = doc.get("gfs_id")
         gfs_ids.append((gfs_id, doc.get("original_file_name", "")))
     return gfs_ids
-
-
-def upload_file_to_s3(file_contents, doc, s3_path):
-    # Ensure doc and file_contents are not None before proceeding
-    if doc is not None and file_contents is not None:
-        output_path = s3_path
-        with open(output_path, "wb") as f:
-            f.write(file_contents)
-    else:
-        print("File or document not found.")
-
-
-def dump_data_to_s3(accession_number: str):
-    client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
-    db = client["fireworks"]
-    coll = db["filepad"]
-    gfs_id = get_requested_file_gfs_id_pdf(accession_number)
-
-    return FWAction(update_spec=None, stored_data=None)
