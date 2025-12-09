@@ -1,12 +1,8 @@
 from uuid import uuid4
-import PIL
-from fireworks.core.launchpad import LaunchPad
 from fireworks.fw_config import os
-from fireworks.utilities.filepad import FilePad
 import certifi
 from fireworks.core.firework import FWAction
 from marker.renderers.json import JSONOutput
-import woolworm
 import cv2
 import numpy as np
 import tempfile
@@ -15,7 +11,6 @@ from PIL import Image
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.config.parser import ConfigParser
-from tqdm import tqdm
 import math
 from typing import Union, Tuple
 from deskew import determine_skew
@@ -32,7 +27,14 @@ from my_pads import fp, lp
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
 url = os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
-s3 = boto3.client("s3")
+fp = fp
+lp = lp
+
+s3 = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
+)
 
 
 def rotate(
@@ -402,254 +404,39 @@ def image_to_pdf(*args):
 def surya_on_image(*args):
     """
     Adds a marker to each page of a PDF.
-    args[0] = GridFS file ID of the PDF (may be nested)
-    args[1] = optional barcode_dir (not used here)
+    args[0] = S3 Key of the Image
     """
     from PIL import Image
     from io import BytesIO
 
-    client = MongoClient(url)
-    db = client["fireworks"]
-    coll = db["pages"]
+    s3_key = args[0]
+    filename: str = args[1]
+    accession_number = args[2]
 
-    logger.info(f"Value of args: {args}")
-    logger.info(f"Value of args[0]: {args[0]}")
-    logger.info(f"Value of args[1]: {args[1]}")
-    gfs_id = args[0]
-    file_name = args[0][0]
+    output_filename = filename.replace(".jp2", ".txt")
+    response = s3.get_object(Bucket="meadow-s-ingest", Key=s3_key)
+    data = response["Body"].read()
 
-    logger.info(f"Now running on image_id: {gfs_id, file_name}")
-    accession_number = args[1]
-    file_contents, doc = fp.get_file(gfs_id)
-    logger.debug(f"Type of file content: {type(file_contents)}")
-    logger.info("Successfully called doc")
-
-    config = {
-        "output_format": "json",
-        "paginate_output": True,
-    }
-
-    config_parser = ConfigParser(config)
+    # Make OCR Predictions
+    logger.info("Making Predictions")
     foundation_predictor = FoundationPredictor()
     recognition_predictor = RecognitionPredictor(foundation_predictor)
     detection_predictor = DetectionPredictor()
     predictions = recognition_predictor(
-        [Image.open(BytesIO(file_contents))], det_predictor=detection_predictor
+        [Image.open(BytesIO(data))], det_predictor=detection_predictor
     )
-    results = []
-    import json
 
-    text_lines = []
-    print(len(predictions))
+    # Extract text from json
+    logger.info("Extracting text.")
+    text_key = "/".join([accession_number, "txt", output_filename])
+    logger.info(f"Saving text to {text_key}")
+    text_bytes = []
     for i, prediction in enumerate(predictions):
         data = prediction.model_dump()
-        data["accession_number"] = accession_number
-        coll.insert_one(data)
+
         for i in data["text_lines"]:
-            print(i["text"])
-    print(text_lines)
-    return FWAction(update_spec={"marker_output": predictions}, stored_data={})
-
-
-def marker_on_pdf(*args):
-    """
-    Adds a marker to each page of a PDF.
-    args[0] = GridFS file ID of the PDF (may be nested)
-    args[1] = optional barcode_dir (not used here)
-    """
-    import base64
-    import binascii
-    import logging
-    import os
-    import re
-    from pathlib import Path
-
-    pdf_id = args[0][0] if isinstance(args[0], (list, tuple)) else args[0]
-    accession_number = args[1]
-    file_contents, doc = fp.get_file(pdf_id)
-    print(doc)
-    # Normalize to raw bytes
-    if hasattr(file_contents, "read"):
-        try:
-            file_contents = file_contents.read()
-        except Exception as e:
-            raise RuntimeError(f"Failed reading GridFS file for {pdf_id}: {e}")
-
-    # If it is a str, maybe it's base64 or plain text (invalid)
-    if isinstance(file_contents, str):
-        if file_contents.startswith("%PDF"):
-            file_contents = file_contents.encode("utf-8")
-        else:
-            try:
-                file_contents = base64.b64decode(file_contents, validate=True)
-            except binascii.Error:
-                raise ValueError(
-                    "File content is a string and not valid base64 nor a PDF header"
-                )
-
-    if not isinstance(file_contents, (bytes, bytearray)):
-        raise TypeError(f"Unexpected file_contents type: {
-                        type(file_contents)}")
-
-    # Dump raw retrieved bytes for inspection (even if empty / invalid)
-    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(pdf_id))[:60]
-    if file_contents.startswith(b"%PDF"):
-        debug_name = f"retrieved_{safe_id}.pdf"
-    else:
-        debug_name = f"retrieved_{safe_id}.bin"
-    try:
-        with open(debug_name, "wb") as dbg:
-            dbg.write(file_contents)
-        logging.info(
-            f"Wrote raw retrieved file to {os.path.abspath(debug_name)} (size={
-                len(file_contents)
-            })"
-        )
-    except Exception as e:
-        logging.warning(f"Failed writing debug file {debug_name}: {e}")
-
-    # Basic PDF sanity checks
-    if not file_contents.startswith(b"%PDF"):
-        preview = file_contents[:32]
-        raise ValueError(
-            f"Retrieved data does not look like a PDF. Starts with: {preview}"
-        )
-
-    if b"%%EOF" not in file_contents[-2048:]:
-        logging.warning("PDF missing trailing %%EOF marker (may be truncated)")
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-        temp_pdf_path = tmp_file.name
-        tmp_file.write(file_contents)
-
-    if Path(temp_pdf_path).stat().st_size == 0:
-        raise ValueError("Temporary PDF file is empty after write")
-    # Save it to current dir for inspection test
-    with open(f"debug_{safe_id}.pdf", "wb") as dbg:
-        dbg.write(file_contents)
-
-    # Run Marker on PDF via Python API
-    config = {
-        "output_format": "json",
-        "paginate_output": True,
-    }
-    config_parser = ConfigParser(config)
-    converter = PdfConverter(
-        config=config_parser.generate_config_dict(),
-        artifact_dict=create_model_dict(),
-        processor_list=config_parser.get_processors(),
-        renderer=config_parser.get_renderer(),
-        llm_service=config_parser.get_llm_service(),
-    )
-
-    try:
-        rendered: JSONOutput
-        rendered = converter(temp_pdf_path)
-        # Persist rendered JSON via a secure temp file (avoid cluttering CWD)
-
-        logger.info("Now uploading 'schema.json' to S3 DUMMY")
-        # s3.upload_fileobj(
-        #     rendered,
-        #     "environmental-impact-statements-data",
-        #     f"{accession_number}/schema.json",
-        # )
-
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as tmp_json:
-            json_path = tmp_json.name
-            tmp_json.write(rendered.model_dump_json(indent=2))
-
-        try:
-            file_id, id = fp.add_file(
-                json_path,
-                identifier=str(uuid4),
-                metadata={
-                    "firework_name": "marker_on_pdf",
-                    "accession_number": accession_number,
-                },
-            )
-            print(file_id, id)
-        finally:
-            try:
-                os.unlink(json_path)
-            except OSError:
-                pass
-    except Exception as e:
-        raise RuntimeError(
-            f"Marker/PDFium failed on {pdf_id} (temp: {temp_pdf_path}): {e}"
-        )
-
-    return FWAction(update_spec={"marker_output": rendered}, stored_data={})
-
-
-def get_requested_file_gfs_id_yaml(target_id):
-    client = MongoClient(url)
-
-    db = client["fireworks"]
-    filepad_col = db["filepad"]
-    result = filepad_col.find_one(
-        {
-            "metadata.accession_number": target_id,
-            "metadata.firework_name": "convert_mets_to_yml",
-        }
-    )
-    print(result)
-    gfs_id = result.get("gfs_id", {})
-    return gfs_id
-
-
-def get_requested_file_gfs_id_json(target_id):
-    client = MongoClient(url)
-
-    db = client["fireworks"]
-    filepad_col = db["filepad"]
-    result = filepad_col.find_one(
-        {
-            "metadata.accession_number": target_id,
-            "metadata.firework_name": "marker_on_pdf",
-        }
-    )
-    if isinstance(result, dict):
-        print(result)
-        gfs_id = result.get("gfs_id")
-        return gfs_id
-    else:
-        logger.info("Could not find JSON Documents!")
-
-
-def get_requested_file_gfs_id_pdf(accession_number: str) -> str | None:
-    """
-    `get_requested_file_gfs_id_pdf`
-    """
-
-    client = MongoClient(url)
-
-    db = client["fireworks"]
-    filepad_col = db["filepad"]
-    result = filepad_col.find_one(
-        {
-            "metadata.accession_number": accession_number,
-            "metadata.firework_name": "image_to_pdf",
-        }
-    )
-    return result.get("gfs_id")
-
-
-def get_requested_file_gfs_id_pngs(target_id):
-    client = MongoClient(url)
-
-    db = client["fireworks"]
-    filepad_col = db["filepad"]
-    result = filepad_col.find(
-        {
-            "metadata.accession_number": target_id,
-            "metadata.firework_name": "image_conversion",
-        }
-    )
-    print(result)
-    gfs_ids = []
-    for doc in result:
-        gfs_id = doc.get("gfs_id")
-        gfs_ids.append((gfs_id, doc.get("original_file_name", "")))
-    return gfs_ids
+            line = i["text"] + "\n"
+            text_bytes.append(i["text"])
+    text_bytes = "\n".join(text_bytes).encode("utf-8")
+    s3.put_object(Body=text_bytes, Bucket="meadow-s-ingest", Key=text_key)
+    return [text_bytes]

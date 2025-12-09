@@ -8,6 +8,14 @@ import argparse
 from tqdm import tqdm
 from fabric import Connection
 from loguru import logger
+from pathlib import Path
+import boto3
+
+s3 = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -63,7 +71,6 @@ fp = FilePad(
     port=27017,
     uri_mode=True,
 )
-
 if do_reset:
     lp.reset("2025-10-08", require_password=False)
     fp.reset()
@@ -75,7 +82,8 @@ files = []
 if is_recursive:
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**",
+                      f"*.{suffix}"), recursive=True)
         )
     files = sorted(files)
     print(files)
@@ -84,106 +92,51 @@ if is_recursive:
 else:
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**",
+                      f"*.{suffix}"), recursive=True)
         )
     print(files)
-    identifiers = []
-    xml_identifier = None
+    specs = []
     for f in tqdm(sorted(files), desc="Uploading files..."):
-        name = f.split("/")[-1]
+        f = Path(f)
+        logger.info(f"Name of file: {f.name}")
         logger.info(f"Value of f: {f}")
-        new_identifier = str(accession_number) + "_" + str(name).zfill(10)
+        new_identifier = str(accession_number) + "_" + str(f.name).zfill(10)
         logger.info(f"Value of new identifier: {new_identifier}")
         print(new_identifier)
-        if not f.endswith(".xml"):
-            file_id, doc = fp.add_file(
-                f,
-                identifier=new_identifier,
-                metadata={
-                    "source_path": f,
-                    "filename": name,
-                    "accession_number": accession_number,
-                },
-            )
-            identifiers.append((file_id, doc))
-            logger.info(f"File {f} uploaded. file_id: {file_id}; doc: {doc}")
-        else:
-            print("Found metadata xml file:")
-            file_id, doc = fp.add_file(
-                f,
-                identifier=new_identifier,
-                metadata={
-                    "source_path": f,
-                    "filename": name,
-                    "accession_number": accession_number,
-                },
-            )
-            logger.info(f"File {f} uploaded. file_id: {file_id}; doc: {doc}")
-            xml_identifier = file_id
-    if xml_identifier is not None:
-        spec = {
-            "identifiers": identifiers,
-            "accession_number": accession_number,
-            "xml_identifier": xml_identifier,
-        }
+        logger.info(f"Now attempting to upload {f} to S3")
+        key = "/".join([accession_number, "SOURCE", f.suffix[1:], f.name])
 
-    else:
-        spec = {"identifiers": identifiers, "accession_number": accession_number}
+        logger.debug(f"Value of key: {key}")
+        logger.debug(f"Value of accession number: {accession_number}")
+        logger.debug(f"Value of f: {f}")
 
-    if xml_identifier is not None:
-        marker_ocr_tasks = []
-        for identifier in spec["identifiers"]:
-            marker_ocr_tasks.append(
-                PyTask(
-                    func="auxiliary.surya_on_image",
-                    inputs=["identifier", "accession_number"],
-                    outputs="converted_images",
-                )
-            )
-        fw1 = Firework(tasks=marker_ocr_tasks)
-        wf = Workflow(fireworks=[fw1])
-        wf = Workflow(
-            [fw1],
-            metadata={"accession_number": accession_number},
-            name=accession_number,
-            links_dict=None,
-        )
-    else:
-        fireworks = []
-        for identifier in identifiers:
-            logger.info(f"Creating tasks for identifier: {identifier}")
-            spec = {
-                "identifier": [
-                    identifier
-                ],  # Note: wrapping in list since image_conversion_task expects a list
-                "accession_number": accession_number,
-            }
+        specs.append({"source_s3_key": key,
+                     "file_name": f.name,
+                      "accession_number": accession_number},)
 
-            # First task: image conversion
-            conversion_task = PyTask(
-                func="auxiliary.image_conversion_task",
-                inputs=["identifier", "accession_number"],
-                outputs=[
-                    "converted_images"
-                ],  # This outputs the converted image identifiers
-            )
+        with open(f, 'rb') as data:
+            s3.upload_fileobj(data,
+                              'meadow-s-ingest', key
+                              )
 
-            # Second task: marker OCR (uses output from conversion_task)
-            marker_task = PyTask(
+    marker_ocr_tasks = []
+    fws = []
+    for i, spec in enumerate(specs):
+        fw = Firework(
+            tasks=PyTask(
                 func="auxiliary.surya_on_image",
-                inputs=[
-                    "converted_images",
-                    "accession_number",
-                ],  # Changed from "identifier" to "converted_images"
-                outputs=["page_schema"],
-            )
+                inputs=["source_s3_key", "file_name", "accession_number"],
+            ),
+            spec=spec,
+            name=f"Image {i:010d}"
+        )
 
-            fw = Firework(
-                tasks=[conversion_task, marker_task],  # Tasks run in sequence
-                name=f"{accession_number}_{identifier}",
-                spec=spec,
-            )
-            fireworks.append(fw)
-
-        wf = Workflow(fireworks=fireworks, name=accession_number)
-        lp.add_wf(wf)
+        fws.append(fw)
+    wf = Workflow(
+        fws,
+        metadata={"accession_number": accession_number},
+        name=accession_number,
+        links_dict=None,
+    )
+    lp.add_wf(wf)
