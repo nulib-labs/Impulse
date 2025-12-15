@@ -22,7 +22,7 @@ from surya.foundation import FoundationPredictor
 from surya.recognition import RecognitionPredictor
 from surya.detection import DetectionPredictor
 from my_pads import fp, lp
-
+import pandas as pd
 # Global vars
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -35,6 +35,33 @@ s3 = boto3.client(
     aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
 )
+
+
+def make_ingest_sheet(*args):
+    filenames: str = args[0]
+    accession_number = args[1]
+
+    csv_buffer = io.StringIO()
+    df = pd.DataFrame(
+        {"work_type": ["IMAGE" for i in filenames],
+         "work_accession_number": [accession_number for i in filenames],
+         "file_accession_number": filenames,
+         "filename": None,
+         "description": None,
+         "role": None,
+         "label": ["" for i in filenames],
+         "work_image": ["" for i in filenames],
+         "structure": [f for f in filenames]
+         }
+    )
+    df.to_csv(csv_buffer)
+
+    key = "/".join([accession_number, "ingest.csv"])
+    s3.upload_fileobj(csv_buffer,
+                      'meadow-s-ingest',
+                      key
+                      )
+    pass
 
 
 def rotate(
