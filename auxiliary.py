@@ -38,10 +38,11 @@ s3 = boto3.client(
 
 
 def make_ingest_sheet(*args):
+    from io import StringIO, BytesIO
+    logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
 
-    csv_buffer = io.StringIO()
     df = pd.DataFrame(
         {"work_type": ["IMAGE" for i in filenames],
          "work_accession_number": [accession_number for i in filenames],
@@ -54,13 +55,22 @@ def make_ingest_sheet(*args):
          "structure": [f for f in filenames]
          }
     )
-    df.to_csv(csv_buffer)
+    csv_buffer = StringIO()
+    df.to_csv(csv_buffer, index=False)
 
-    key = "/".join([accession_number, "ingest.csv"])
-    s3.upload_fileobj(csv_buffer,
-                      'meadow-s-ingest',
-                      key
-                      )
+    # Reset buffer position to beginning
+    csv_buffer.seek(0)
+
+    # Convert StringIO to BytesIO for upload_fileobj
+    bytes_buffer = BytesIO(csv_buffer.getvalue().encode())
+
+    ingest_key = "/".join([accession_number, "ingest.csv"])
+
+    s3.upload_fileobj(
+        bytes_buffer,
+        "meadow-s-ingest",
+        accession_number + "/ingest.csv"
+    )
     pass
 
 

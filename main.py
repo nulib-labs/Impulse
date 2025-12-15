@@ -133,6 +133,18 @@ else:
         )
 
         fws.append(fw)
+
+    ingest_sheet_fw = Firework(
+        tasks=[PyTask(
+            func="auxiliary.make_ingest_sheet",
+            inputs=["file_names", "accession_number"],
+        )],
+        spec={
+            "file_names": [f.get("file_name") for f in specs],
+            "accession_number": accession_number
+        }
+    )
+    fws.append(ingest_sheet_fw)
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},
