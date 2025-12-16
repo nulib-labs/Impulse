@@ -42,19 +42,23 @@ def make_ingest_sheet(*args):
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
+    file_accession_numbers = []
+    for f in filenames:
+        file_accession_numbers.append(f.split("/")[-1].split(".")[0])
 
     df = pd.DataFrame(
         {"work_type": ["IMAGE" for i in filenames],
          "work_accession_number": [accession_number for i in filenames],
-         "file_accession_number": filenames,
-         "filename": None,
-         "description": None,
-         "role": None,
-         "label": ["" for i in filenames],
+         "file_accession_number": [f.replace(".jp2", "") for f in filenames],
+         "filename": ["/".join(["SOURCE", "jpg", f.replace(".jp2", ".jpg")]) for f in filenames],
+         "description": [f.replace(".jp2", ".jpg") for f in filenames],
+         "role": ["A" for i in filenames],
+         "label": [i for i, f in enumerate(filenames)],
          "work_image": ["" for i in filenames],
-         "structure": [f for f in filenames]
+         "structure": ["/".join(["txt", f.replace(".jp2", ".txt")]) for f in filenames]
          }
     )
+
     csv_buffer = StringIO()
     df.to_csv(csv_buffer, index=False)
 
@@ -451,6 +455,7 @@ def surya_on_image(*args):
     accession_number = args[2]
 
     output_filename = filename.replace(".jp2", ".txt")
+    logger.info(f"Value of output filename: {output_filename}")
     response = s3.get_object(Bucket="meadow-s-ingest", Key=s3_key)
     data = response["Body"].read()
 

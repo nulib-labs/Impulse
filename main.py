@@ -112,13 +112,43 @@ else:
         logger.debug(f"Value of f: {f}")
 
         specs.append({"source_s3_key": key,
-                     "file_name": f.name,
+                      "file_name": f.name,
                       "accession_number": accession_number},)
-
         with open(f, 'rb') as data:
             s3.upload_fileobj(data,
                               'meadow-s-ingest', key
                               )
+        if f.suffix.lower() == '.jp2':
+            logger.info(f"Converting {f.name} from JP2 to JPG")
+            try:
+                from PIL import Image
+                import io
+
+                # Open and convert JP2 to JPG
+                with Image.open(f) as img:
+                    # Convert to RGB if necessary (JP2 might be in different color mode)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+
+                    # Create JPG filename
+                    jpg_filename = f.stem + '.jpg'
+
+                    # Save to bytes buffer
+                    buffer = io.BytesIO()
+                    img.save(buffer, format='JPEG', quality=95)
+                    buffer.seek(0)
+
+                    # Upload JPG version
+                    jpg_key = "/".join([accession_number,
+                                        "SOURCE", "jpg", jpg_filename])
+                    logger.info(f"Uploading JPG version: {jpg_filename}")
+
+                    s3.upload_fileobj(buffer,
+                                      'meadow-s-ingest', jpg_key
+                                      )
+
+            except Exception as e:
+                logger.error(f"Failed to convert {f.name} to JPG: {e}")
 
     marker_ocr_tasks = []
     fws = []
