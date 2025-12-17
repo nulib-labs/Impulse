@@ -104,7 +104,7 @@ else:
     print(files)
     fws = []
     specs = []
-
+    filenames = []
     for i, f in tqdm(enumerate(sorted(files)), desc="Uploading files...", total=len(files)):
         f = Path(f)  # Make f a path
 
@@ -152,6 +152,7 @@ else:
                         img.save(buffer, format='JPEG', quality=95)
                         buffer.seek(0)
 
+                        filenames.append(jpg_filename)
                         # Upload JPG version
                         jpg_key_meadow = "/".join(["p0491p1074eis-1766005955", accession_number,
                                                    "SOURCE", "jpg", jpg_filename])
@@ -171,7 +172,7 @@ else:
                             jpg_key_impulse
                         )
 
-                        spec = {"source_s3_key": jpg_key_impulse,
+                        spec = {"source_s3_key": jpg_key_meadow,
                                 "file_name": f.name,
                                 "accession_number": accession_number}
 
@@ -189,7 +190,6 @@ else:
 
                 except Exception as e:
                     logger.error(f"Failed to convert {f.name} to JPG: {e}")
-
             new_identifier = str(accession_number) + \
                 "_" + str(f.name).zfill(10)
             key_meadow = "/".join(["p0491p1074eis-1766005955",
@@ -209,6 +209,17 @@ else:
                     key_impulse
                 )
 
+    fw = Firework(
+        tasks=PyTask(
+            func="auxiliary.make_ingest_sheet",
+            inputs=["filenames",
+                    "accession_number"],
+        ),
+        spec={"filenames": filenames,
+              "accession_number": accession_number},
+        name="Make Ingest Sheet"
+    )
+    fws.append(fw)
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},

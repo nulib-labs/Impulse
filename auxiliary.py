@@ -32,8 +32,8 @@ lp = lp
 
 s3 = boto3.client(
     's3',
-    aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
+    aws_access_key_id=os.getenv("MEADOW_PROD_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY")
 )
 
 
@@ -333,8 +333,8 @@ def convert_mets_to_yml(*args):
         '/', 1)[0] + '/mets.yaml' if '/' in s3_key else 'mets.yaml'
 
     try:
-        s3.put_object(
-            Bucket="meadow-s-ingest",
+        s3_impulse.put_object(
+            Bucket="nu-impulse-production",
             Key=s3_output_key,
             Body=yaml_content.encode('utf-8'),
             ContentType='application/x-yaml'
@@ -482,7 +482,7 @@ def surya_on_image(*args):
     confidence_output_filename = filename.replace(".jp2", ".json")
 
     logger.info(f"Value of output filename: {output_filename}")
-    response = s3.get_object(Bucket="meadow-s-ingest", Key=s3_key)
+    response = s3.get_object(Bucket="meadow-p-ingest", Key=s3_key)
     data = response["Body"].read()
 
     # Make OCR Predictions
