@@ -154,23 +154,33 @@ def get_mongo_client_kwargs():
 
 def convert_mets_to_yml(*args):
     """
-    FireWorks task function: Convert a METS XML file from GridFS into a YAML file
-    following HathiTrust ingest specs, and save the YAML back to GridFS.
-    args[0] = gfs_id of the METS XML file in GridFS
+    FireWorks task function: Convert a METS XML file from S3 into a YAML file
+    following HathiTrust ingest specs, and save the YAML back to S3.
+    args[0] = s3_key of the METS XML file in S3
+    args[1] = filename
+    args[2] = accession_number
     """
-    gfs_id = args[0]
-    accession_number = args[1]
-    # === Step 1: Get XML contents from GridFS ===
-    file_contents, doc = fp.get_file_by_id(gfs_id)
-    print(file_contents)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp_xml:
-        tmp_xml.write(file_contents)
-        tmp_xml_path = tmp_xml.name
 
-    # === Step 2: Parse the XML ===
+    s3_key = args[0]
+    filename = args[1]
+    accession_number = args[2]
+
+    s3_impulse = boto3.client(
+        's3',
+        aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+    )
+
+    output_filename = filename.replace(".xml", ".yaml")
+    logger.info(f"Value of output filename: {output_filename}")
+    response = s3_impulse.get_object(
+        Bucket="nu-impulse-production", Key=s3_key)
+    data = response["Body"].read()
+
+    # === Step 2: Parse the XML directly from memory ===
     try:
         parser = ET.XMLParser(remove_blank_text=True)
-        tree = ET.parse(tmp_xml_path, parser)
+        tree = ET.ElementTree(ET.fromstring(data, parser))
         root = tree.getroot()
     except ET.XMLSyntaxError as e:
         print(f"Error: Invalid XML file: {e}")
@@ -236,8 +246,8 @@ def convert_mets_to_yml(*args):
         if not fileptr:
             continue
         file_id = fileptr[0].get("FILEID")
-        filename = find_filename_by_file_id(file_id)
-        if not filename:
+        page_filename = find_filename_by_file_id(file_id)
+        if not page_filename:
             continue
 
         parent = element.getparent()
@@ -254,83 +264,91 @@ def convert_mets_to_yml(*args):
                 and parent == logical_pages[0].getparent()
             ):
                 label = "FRONT_COVER"
-                line = f'{filename}: {{ label: "{label}" }}'
+                line = f'{page_filename}: {{ label: "{label}" }}'
             elif parent_label == "Front Matter" and orderlabel:
-                line = f'{filename}: {{ orderlabel: "{orderlabel}" }}'
+                line = f'{page_filename}: {{ orderlabel: "{orderlabel}" }}'
             elif parent_label == "Title":
                 label = "TITLE"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Contents":
                 label = "TABLE_OF_CONTENTS"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Preface":
                 label = "PREFACE"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label.startswith("Chapter") or parent_label == "Appendix":
                 label = "CHAPTER_START"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label in ("Notes", "Bibliography"):
                 label = "REFERENCES"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Index":
                 label = "INDEX"
                 line = (
-                    f'{filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{
+                        orderlabel}", label: "{label}" }}'
                     if orderlabel
-                    else f'{filename}: {{ label: "{label}" }}'
+                    else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Cover" and parent_type == "cover":
                 label = "BACK_COVER"
-                line = f'{filename}: {{ label: "{label}" }}'
+                line = f'{page_filename}: {{ label: "{label}" }}'
         else:
             if orderlabel:
-                line = f'{filename}: {{ orderlabel: "{orderlabel}" }}'
+                line = f'{page_filename}: {{ orderlabel: "{orderlabel}" }}'
 
         if line:
             yaml_lines.append("    " + line)
 
-    # === Step 5: Write YAML to temp file ===
+    # === Step 5: Write YAML to S3 ===
+    yaml_content = "\n".join(yaml_lines)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".yml") as tmp_yml:
-        tmp_yml.write("\n".join(yaml_lines).encode("utf-8"))
-        tmp_yml_path = tmp_yml.name
+    # Construct the S3 key for the output YAML file
+    # If s3_key is like "path/to/file.xml", replace with "path/to/mets.yaml"
+    s3_output_key = s3_key.rsplit(
+        '/', 1)[0] + '/mets.yaml' if '/' in s3_key else 'mets.yaml'
 
-    # === Step 6: Save YAML back to GridFS ===
-    file_id, identifier = fp.add_file(
-        tmp_yml_path,
-        identifier=str(uuid4()),
-        metadata={
-            "firework_name": "convert_mets_to_yml",
-            "source_mets_gfs_id": gfs_id,
-            "accession_number": accession_number,
-        },
-    )
-
-    print(f"Wrote YAML to GridFS with ID: {file_id}")
+    try:
+        s3.put_object(
+            Bucket="meadow-s-ingest",
+            Key=s3_output_key,
+            Body=yaml_content.encode('utf-8'),
+            ContentType='application/x-yaml'
+        )
+        logger.info(f"Successfully wrote YAML to S3: {s3_output_key}")
+    except Exception as e:
+        logger.error(f"Failed to write YAML to S3: {e}")
+        raise
 
     return FWAction(
-        update_spec={"yml_gfs_id": file_id, "yml_identifier": identifier},
-        stored_data={"yml_gfs_id": file_id},
+        update_spec={"yml_s3_key": s3_output_key,
+                     "yml_identifier": accession_number},
+        stored_data={"yml_s3_key": s3_output_key},
     )
 
 
@@ -449,12 +467,21 @@ def surya_on_image(*args):
     """
     from PIL import Image
     from io import BytesIO
+    import json
 
     s3_key = args[0]
     filename: str = args[1]
     accession_number = args[2]
 
+    s3_impulse = boto3.client(
+        's3',
+        aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+    )
+
     output_filename = filename.replace(".jp2", ".txt")
+    confidence_output_filename = filename.replace(".jp2", ".json")
+
     logger.info(f"Value of output filename: {output_filename}")
     response = s3.get_object(Bucket="meadow-s-ingest", Key=s3_key)
     data = response["Body"].read()
@@ -470,15 +497,40 @@ def surya_on_image(*args):
 
     # Extract text from json
     logger.info("Extracting text.")
-    text_key = "/".join([accession_number, "txt", output_filename])
+    text_key = "/".join([accession_number, "TXT", output_filename])
+    confidence_key = "/".join([accession_number,
+                              "CONFIDENCES", output_filename.replace(".txt", ".json")])
     logger.info(f"Saving text to {text_key}")
-    text_bytes = []
-    for i, prediction in enumerate(predictions):
-        data = prediction.model_dump()
+    text_lines = []
+    predictions_data = []
 
-        for i in data["text_lines"]:
-            line = i["text"] + "\n"
-            text_bytes.append(i["text"])
-    text_bytes = "\n".join(text_bytes).encode("utf-8")
-    s3.put_object(Body=text_bytes, Bucket="meadow-s-ingest", Key=text_key)
+    for prediction in predictions:
+        data = prediction.model_dump()
+        predictions_data.append(data)
+
+        for line in data["text_lines"]:
+            text_lines.append(line["text"])
+
+    text_bytes = "\n".join(text_lines).encode("utf-8")
+
+    predictions_bytes = json.dumps(
+        predictions_data,
+        ensure_ascii=False,  # preserve unicode text
+        indent=2              # optional, for readability
+    ).encode("utf-8")
+
+    s3.put_object(
+        Body=text_bytes,
+        Bucket="meadow-s-ingest",
+        Key=text_key,
+        ContentType="text/plain; charset=utf-8",
+    )
+
+    s3_impulse.put_object(
+        Body=predictions_bytes,
+        Bucket="nu-impulse-production",
+        Key=confidence_key,
+        ContentType="application/json",
+    )
+
     return [text_bytes]

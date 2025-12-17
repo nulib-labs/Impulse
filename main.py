@@ -16,6 +16,11 @@ s3 = boto3.client(
     aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
 )
+s3_impulse = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -71,6 +76,7 @@ fp = FilePad(
     port=27017,
     uri_mode=True,
 )
+
 if do_reset:
     lp.reset("2025-10-08", require_password=False)
     fp.reset()
@@ -96,89 +102,111 @@ else:
                       f"*.{suffix}"), recursive=True)
         )
     print(files)
-    specs = []
-    for f in tqdm(sorted(files), desc="Uploading files..."):
-        f = Path(f)
-        logger.info(f"Name of file: {f.name}")
-        logger.info(f"Value of f: {f}")
-        new_identifier = str(accession_number) + "_" + str(f.name).zfill(10)
-        logger.info(f"Value of new identifier: {new_identifier}")
-        print(new_identifier)
-        logger.info(f"Now attempting to upload {f} to S3")
-        key = "/".join([accession_number, "SOURCE", f.suffix[1:], f.name])
-
-        logger.debug(f"Value of key: {key}")
-        logger.debug(f"Value of accession number: {accession_number}")
-        logger.debug(f"Value of f: {f}")
-
-        specs.append({"source_s3_key": key,
-                      "file_name": f.name,
-                      "accession_number": accession_number},)
-        with open(f, 'rb') as data:
-            s3.upload_fileobj(data,
-                              'meadow-s-ingest', key
-                              )
-        if f.suffix.lower() == '.jp2':
-            logger.info(f"Converting {f.name} from JP2 to JPG")
-            try:
-                from PIL import Image
-                import io
-
-                # Open and convert JP2 to JPG
-                with Image.open(f) as img:
-                    # Convert to RGB if necessary (JP2 might be in different color mode)
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-
-                    # Create JPG filename
-                    jpg_filename = f.stem + '.jpg'
-
-                    # Save to bytes buffer
-                    buffer = io.BytesIO()
-                    img.save(buffer, format='JPEG', quality=95)
-                    buffer.seek(0)
-
-                    # Upload JPG version
-                    jpg_key = "/".join([accession_number,
-                                        "SOURCE", "jpg", jpg_filename])
-                    logger.info(f"Uploading JPG version: {jpg_filename}")
-
-                    s3.upload_fileobj(buffer,
-                                      'meadow-s-ingest', jpg_key
-                                      )
-
-            except Exception as e:
-                logger.error(f"Failed to convert {f.name} to JPG: {e}")
-
-    marker_ocr_tasks = []
     fws = []
-    for i, spec in enumerate(specs):
-        fw = Firework(
-            tasks=PyTask(
-                func="auxiliary.surya_on_image",
-                inputs=["source_s3_key", "file_name", "accession_number"],
-            ),
-            spec=spec,
-            name=f"Image {i:010d}"
-        )
+    specs = []
 
-        fws.append(fw)
+    for i, f in tqdm(enumerate(sorted(files)), desc="Uploading files...", total=len(files)):
+        f = Path(f)  # Make f a path
 
-    ingest_sheet_fw = Firework(
-        tasks=[PyTask(
-            func="auxiliary.make_ingest_sheet",
-            inputs=["file_names", "accession_number"],
-        )],
-        spec={
-            "file_names": [f.get("file_name") for f in specs],
-            "accession_number": accession_number
-        }
-    )
-    fws.append(ingest_sheet_fw)
+        # If f is an image path
+        if f.suffix.lower() in [".jpg", ".png", ".jpeg", ".tiff", ".jp2", ".xml"]:
+            if f.suffix.lower() == ".xml":
+                import io
+                with open(f, "rb") as data:
+                    xml_key = "/".join([accession_number, "mets.xml"])
+                    s3_impulse.upload_fileobj(
+                        data,
+                        'nu-impulse-production',
+                        xml_key
+                    )
+                spec = {"source_s3_key": xml_key,
+                        "file_name": f.name,
+                        "accession_number": accession_number}
+                fw = Firework(
+                    tasks=PyTask(
+                        func="auxiliary.convert_mets_to_yml",
+                        inputs=["source_s3_key",
+                                "file_name", "accession_number"],
+                    ),
+                    spec=spec,
+                    name=f"Convert METSXML to YAML"
+                )
+                fws.append(fw)
+
+            if f.suffix.lower() == ".jp2":
+                try:
+                    from PIL import Image
+                    import io
+
+                    # Open and convert JP2 to JPG
+                    with Image.open(f) as img:
+                        # Convert to RGB if necessary (JP2 might be in different color mode)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+
+                        # Create JPG filename
+                        jpg_filename = f.stem + '.jpg'
+
+                        # Save to bytes buffer
+                        buffer = io.BytesIO()
+                        img.save(buffer, format='JPEG', quality=95)
+                        buffer.seek(0)
+
+                        # Upload JPG version
+                        jpg_key = "/".join([accession_number,
+                                            "SOURCE", "jpg", jpg_filename])
+                        jpg_bytes = buffer.getvalue()
+
+                        s3.upload_fileobj(
+                            io.BytesIO(jpg_bytes),
+                            'meadow-s-ingest',
+                            jpg_key
+                        )
+
+                        s3_impulse.upload_fileobj(
+                            io.BytesIO(jpg_bytes),
+                            'nu-impulse-production',
+                            jpg_key
+                        )
+
+                        spec = {"source_s3_key": jpg_key,
+                                "file_name": f.name,
+                                "accession_number": accession_number}
+                        fw = Firework(
+                            tasks=PyTask(
+                                func="auxiliary.surya_on_image",
+                                inputs=["source_s3_key",
+                                        "file_name", "accession_number"],
+                            ),
+                            spec=spec,
+                            name=f"Image {i:010d}"
+                        )
+                        fws.append(fw)
+                        continue
+
+                except Exception as e:
+                    logger.error(f"Failed to convert {f.name} to JPG: {e}")
+
+            new_identifier = str(accession_number) + \
+                "_" + str(f.name).zfill(10)
+            key = "/".join([accession_number, "SOURCE", f.suffix[1:], f.name])
+
+            with open(f, 'rb') as data:
+                s3.upload_fileobj(data,
+                                  'meadow-s-ingest', key
+                                  )
+
+            with open(f, 'rb') as data:
+                s3_impulse.upload_fileobj(
+                    data,
+                    'nu-impulse-production',
+                    key
+                )
+
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},
         name=accession_number,
-        links_dict=None,
+        links_dict={},
     )
     lp.add_wf(wf)
