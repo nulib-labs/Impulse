@@ -13,8 +13,8 @@ import boto3
 
 s3 = boto3.client(
     's3',
-    aws_access_key_id=os.getenv("MEADOW_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("MEADOW_SECRET_ACCESS_KEY")
+    aws_access_key_id=os.getenv("MEADOW_PROD_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY")
 )
 s3_impulse = boto3.client(
     's3',
@@ -153,25 +153,28 @@ else:
                         buffer.seek(0)
 
                         # Upload JPG version
-                        jpg_key = "/".join([accession_number,
-                                            "SOURCE", "jpg", jpg_filename])
+                        jpg_key_meadow = "/".join(["p0491p1074eis-1766005955", accession_number,
+                                                   "SOURCE", "jpg", jpg_filename])
+                        jpg_key_impulse = "/".join([accession_number,
+                                                   "SOURCE", "jpg", jpg_filename])
                         jpg_bytes = buffer.getvalue()
 
                         s3.upload_fileobj(
                             io.BytesIO(jpg_bytes),
-                            'meadow-s-ingest',
-                            jpg_key
+                            'meadow-p-ingest',
+                            jpg_key_meadow
                         )
 
                         s3_impulse.upload_fileobj(
                             io.BytesIO(jpg_bytes),
                             'nu-impulse-production',
-                            jpg_key
+                            jpg_key_impulse
                         )
 
-                        spec = {"source_s3_key": jpg_key,
+                        spec = {"source_s3_key": jpg_key_impulse,
                                 "file_name": f.name,
                                 "accession_number": accession_number}
+
                         fw = Firework(
                             tasks=PyTask(
                                 func="auxiliary.surya_on_image",
@@ -189,18 +192,21 @@ else:
 
             new_identifier = str(accession_number) + \
                 "_" + str(f.name).zfill(10)
-            key = "/".join([accession_number, "SOURCE", f.suffix[1:], f.name])
+            key_meadow = "/".join(["p0491p1074eis-1766005955",
+                                  accession_number, "SOURCE", f.suffix[1:], f.name])
 
+            key_impulse = "/".join([accession_number,
+                                   "SOURCE", f.suffix[1:], f.name])
             with open(f, 'rb') as data:
                 s3.upload_fileobj(data,
-                                  'meadow-s-ingest', key
+                                  'meadow-p-ingest', key_meadow
                                   )
 
             with open(f, 'rb') as data:
                 s3_impulse.upload_fileobj(
                     data,
                     'nu-impulse-production',
-                    key
+                    key_impulse
                 )
 
     wf = Workflow(

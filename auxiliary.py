@@ -50,12 +50,12 @@ def make_ingest_sheet(*args):
         {"work_type": ["IMAGE" for i in filenames],
          "work_accession_number": [accession_number for i in filenames],
          "file_accession_number": [f.replace(".jp2", "") for f in filenames],
-         "filename": ["/".join(["SOURCE", "jpg", f.replace(".jp2", ".jpg")]) for f in filenames],
+         "filename": ["/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")]) for f in filenames],
          "description": [f.replace(".jp2", ".jpg") for f in filenames],
          "role": ["A" for i in filenames],
          "label": [i for i, f in enumerate(filenames)],
          "work_image": ["" for i in filenames],
-         "structure": ["/".join(["txt", f.replace(".jp2", ".txt")]) for f in filenames]
+         "structure": ["/".join([accession_number, "txt", f.replace(".jp2", ".txt")]) for f in filenames]
          }
     )
 
@@ -68,12 +68,13 @@ def make_ingest_sheet(*args):
     # Convert StringIO to BytesIO for upload_fileobj
     bytes_buffer = BytesIO(csv_buffer.getvalue().encode())
 
-    ingest_key = "/".join([accession_number, "ingest.csv"])
+    ingest_key = "/".join(["p0491p1074eis-1766005955",
+                          accession_number, "ingest.csv"])
 
     s3.upload_fileobj(
         bytes_buffer,
-        "meadow-s-ingest",
-        accession_number + "/ingest.csv"
+        "meadow-p-ingest",
+        ingest_key
     )
     pass
 
@@ -328,8 +329,6 @@ def convert_mets_to_yml(*args):
     # === Step 5: Write YAML to S3 ===
     yaml_content = "\n".join(yaml_lines)
 
-    # Construct the S3 key for the output YAML file
-    # If s3_key is like "path/to/file.xml", replace with "path/to/mets.yaml"
     s3_output_key = s3_key.rsplit(
         '/', 1)[0] + '/mets.yaml' if '/' in s3_key else 'mets.yaml'
 
@@ -497,10 +496,12 @@ def surya_on_image(*args):
 
     # Extract text from json
     logger.info("Extracting text.")
-    text_key = "/".join([accession_number, "TXT", output_filename])
+    text_key = "/".join(["p0491p1074eis-1766005955",
+                        accession_number, "TXT", output_filename])
     confidence_key = "/".join([accession_number,
                               "CONFIDENCES", output_filename.replace(".txt", ".json")])
     logger.info(f"Saving text to {text_key}")
+
     text_lines = []
     predictions_data = []
 
@@ -521,11 +522,17 @@ def surya_on_image(*args):
 
     s3.put_object(
         Body=text_bytes,
-        Bucket="meadow-s-ingest",
+        Bucket="meadow-p-ingest",
         Key=text_key,
         ContentType="text/plain; charset=utf-8",
     )
 
+    s3_impulse.put_object(
+        Body=text_bytes,
+        Bucket="nu-impulse-production",
+        Key=text_key,
+        ContentType="application/json",
+    )
     s3_impulse.put_object(
         Body=predictions_bytes,
         Bucket="nu-impulse-production",
