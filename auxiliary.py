@@ -55,7 +55,7 @@ def make_ingest_sheet(*args):
          "role": ["A" for i in filenames],
          "label": [i for i, f in enumerate(filenames)],
          "work_image": ["" for i in filenames],
-         "structure": ["/".join([accession_number, "txt", f.replace(".jp2", ".txt")]) for f in filenames]
+         "structure": ["/".join([accession_number, "TXT", f.replace(".jpg", ".txt")]) for f in filenames]
          }
     )
 
@@ -418,16 +418,23 @@ def image_to_pdf(*args):
     """
     Combines JPEG images from GridFS into a single PDF, saves it to a temp file,
     and adds it to GridFS.
-    args[0] = list of GridFS file IDs
-    args[1] = optional barcode_dir (not used here)
+    args[0] = list of S3 file keys
+    args[1] = optional accession_number (not used here)
     """
-    identifiers = args[0]
+    s3_keys = args[0]
     accession_number = args[1]
     images = []
 
-    for file_id in identifiers:
+    s3_impulse = boto3.client(
+        's3',
+        aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+    )
+
+    for s3_key in s3_keys:
         # Get raw file bytes
-        file_contents, doc = fp.get_file(file_id)
+        response = s3.get_object(Bucket="meadow-p-ingest")
+        file_contents = response["Body"]
 
         # Load image from bytes
         img = Image.open(io.BytesIO(file_contents))

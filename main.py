@@ -220,6 +220,17 @@ else:
         name="Make Ingest Sheet"
     )
     fws.append(fw)
+    fw = Firework(
+        tasks=PyTask(
+            func="auxiliary.image_to_pdf",
+            inputs=["filenames",
+                    "accession_number"],
+        ),
+        spec={"filenames": filenames,
+              "accession_number": accession_number},
+        name="Make PDF"
+    )
+    fws.append(fw)
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},
