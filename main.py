@@ -105,6 +105,7 @@ else:
     fws = []
     specs = []
     filenames = []
+    s3_keys = []
     for i, f in tqdm(enumerate(sorted(files)), desc="Uploading files...", total=len(files)):
         f = Path(f)  # Make f a path
 
@@ -160,6 +161,8 @@ else:
                                                    "SOURCE", "jpg", jpg_filename])
                         jpg_bytes = buffer.getvalue()
 
+                        s3_keys.append(jpg_key_impulse)
+
                         s3.upload_fileobj(
                             io.BytesIO(jpg_bytes),
                             'meadow-p-ingest',
@@ -197,6 +200,7 @@ else:
 
             key_impulse = "/".join([accession_number,
                                    "SOURCE", f.suffix[1:], f.name])
+
             with open(f, 'rb') as data:
                 s3.upload_fileobj(data,
                                   'meadow-p-ingest', key_meadow
@@ -220,17 +224,19 @@ else:
         name="Make Ingest Sheet"
     )
     fws.append(fw)
+
     fw = Firework(
         tasks=PyTask(
             func="auxiliary.image_to_pdf",
             inputs=["filenames",
                     "accession_number"],
         ),
-        spec={"filenames": filenames,
+        spec={"filenames": s3_keys,
               "accession_number": accession_number},
         name="Make PDF"
     )
     fws.append(fw)
+
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},

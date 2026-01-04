@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import tempfile
 import io
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.config.parser import ConfigParser
@@ -432,38 +432,48 @@ def image_to_pdf(*args):
     )
 
     for s3_key in s3_keys:
-        # Get raw file bytes
-        response = s3.get_object(Bucket="meadow-p-ingest")
-        file_contents = response["Body"]
+        logger.info(f"Now running on {s3_key}")
 
-        # Load image from bytes
-        img = Image.open(io.BytesIO(file_contents))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        images.append(img)
+        response = s3_impulse.get_object(
+            Bucket="nu-impulse-production",
+            Key=s3_key
+        )
 
-    if not images:
-        raise ValueError("No images were retrieved from GridFS")
+        file_contents = response["Body"].read()
+
+        if not file_contents or len(file_contents) < 1024:
+            logger.warning(f"Skipping {s3_key}: empty or too small")
+            continue
+
+        try:
+            with Image.open(io.BytesIO(file_contents)) as img:
+                img.verify()  # validate before loading
+            img = Image.open(io.BytesIO(file_contents))  # reopen after verify
+
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+            images.append(img)
+
+        except UnidentifiedImageError:
+            logger.error(f"Not an image or unsupported format: {s3_key}")
+            continue
+        except Exception as e:
+            logger.exception(f"Failed processing {s3_key}: {e}")
+            continue
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         temp_pdf_path = tmp_file.name
         # Save images to PDF
         images[0].save(
             temp_pdf_path, save_all=True, append_images=images[1:], format="PDF"
         )
-        file_id, identifier = fp.add_file(
-            temp_pdf_path,
-            identifier=str(uuid4()),
-            metadata={
-                "firework_name": "image_to_pdf",
-                "accession_number": accession_number,
-            },
-        )
-        print(file_id, identifier)
+        s3_impulse.upload_file(
+            temp_pdf_path, "nu-impulse-production", "/".join([accession_number, "main.pdf"]))
+        s3.upload_file(
+            temp_pdf_path, "meadow-p-ingest", "/".join(["p0491p1074eis-1766005955", accession_number, "main.pdf"]))
 
-    return FWAction(
-        update_spec={"PDF_id": [identifier], "pdf_gfs_id": file_id},
-        stored_data={"pdf_gfs_id": file_id},
-    )
+    return None
 
 
 def surya_on_image(*args):
