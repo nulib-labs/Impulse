@@ -7,6 +7,20 @@ import glob
 import argparse
 from tqdm import tqdm
 from fabric import Connection
+from loguru import logger
+from pathlib import Path
+import boto3
+
+s3 = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("MEADOW_PROD_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY")
+)
+s3_impulse = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -56,13 +70,11 @@ lp = LaunchPad(
     port=27017,
     uri_mode=True,
     name="fireworks",
-    logdir="./logs",
 )
 fp = FilePad(
-    host=(conn_str + "/fireworks?"),
+    host=conn_str,
     port=27017,
     uri_mode=True,
-    database="fireworks",
 )
 
 if do_reset:
@@ -74,138 +86,161 @@ suffixes = ["jpg", "png", "jpeg", "tiff", "jp2", "xml"]
 files = []
 
 if is_recursive:
-    print(suffixes)
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**",
+                      f"*.{suffix}"), recursive=True)
         )
     files = sorted(files)
     print(files)
     pass
 
 else:
-    print(suffixes)
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**",
+                      f"*.{suffix}"), recursive=True)
         )
     print(files)
-    identifiers = []
-    xml_identifier = None
-    for f in tqdm(sorted(files), desc="Uploading files..."):
-        name = f.split("/")[-1]
-        new_identifier = str(accession_number) + "_" + str(name).zfill(10)
-        if not f.endswith(".xml"):
-            file_id, _ = fp.add_file(
-                f,
-                identifier=new_identifier,
-                metadata={
-                    "source_path": f,
-                    "filename": name,
-                    "accession_number": accession_number,
-                },
-            )
-            identifiers.append(new_identifier)
-        else:
-            print("Found metadata xml file:")
-            file_id, _ = fp.add_file(
-                f,
-                identifier=new_identifier,
-                metadata={
-                    "source_path": f,
-                    "filename": name,
-                    "accession_number": accession_number,
-                },
-            )
-            xml_identifier = file_id
-    if xml_identifier is not None:
-        spec = {
-            "identifiers": identifiers,
-            "accession_number": accession_number,
-            "xml_identifier": xml_identifier,
-        }
+    fws = []
+    specs = []
+    filenames = []
+    s3_keys = []
+    for i, f in tqdm(enumerate(sorted(files)), desc="Uploading files...", total=len(files)):
+        f = Path(f)  # Make f a path
 
-    else:
-        spec = {"identifiers": identifiers, "accession_number": accession_number}
+        # If f is an image path
+        if f.suffix.lower() in [".jpg", ".png", ".jpeg", ".tiff", ".jp2", ".xml"]:
+            if f.suffix.lower() == ".xml":
+                import io
+                with open(f, "rb") as data:
+                    xml_key = "/".join([accession_number, "mets.xml"])
+                    s3_impulse.upload_fileobj(
+                        data,
+                        'nu-impulse-production',
+                        xml_key
+                    )
+                spec = {"source_s3_key": xml_key,
+                        "file_name": f.name,
+                        "accession_number": accession_number}
+                fw = Firework(
+                    tasks=PyTask(
+                        func="auxiliary.convert_mets_to_yml",
+                        inputs=["source_s3_key",
+                                "file_name", "accession_number"],
+                    ),
+                    spec=spec,
+                    name=f"Convert METSXML to YAML"
+                )
+                fws.append(fw)
 
-    if xml_identifier is not None:
-        print(xml_identifier)
-        fw = Firework(
-            [
-                PyTask(
-                    func="auxiliary.convert_mets_to_yml",
-                    inputs=[
-                        "xml_identifier",
-                        "accession_number",
-                    ],
-                    outputs="yaml_file",
-                ),
-                PyTask(
-                    func="auxiliary.image_conversion_task",
-                    inputs=[
-                        "identifiers",
-                        "accession_number",
-                    ],
-                    outputs="converted_images",
-                ),
-                PyTask(
-                    func="auxiliary.image_to_pdf",
-                    inputs=["converted_images", "accession_number"],
-                    outputs="PDF_id",
-                ),
-                PyTask(
-                    func="auxiliary.marker_on_pdf",
-                    inputs=["PDF_id", "accession_number"],
-                ),
-            ],
-            name=fw_name,
-            spec=spec,
-        )
-        wf = Workflow(
-            [fw], metadata={"accession_number": accession_number}, name=accession_number
-        )
-    else:
-        fw1 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.image_conversion_task",
-                    inputs=[
-                        "identifiers",
-                        "accession_number",
-                    ],
-                    outputs="converted_images",
-                ),
-            ],
-            name=f"Image Conversion Task: {accession_number}",
-            spec=spec,
-        )
-        fw2 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.image_to_pdf",
-                    inputs=["converted_images", "accession_number"],
-                    outputs="PDF_id",
-                ),
-            ],
-            name=f"Image to PDF: {accession_number}",
-            spec=spec,
-        )
+            if f.suffix.lower() == ".jp2":
+                try:
+                    from PIL import Image
+                    import io
 
-        fw3 = Firework(
-            [
-                PyTask(
-                    func="auxiliary.marker_on_pdf",
-                    inputs=["PDF_id", "accession_number"],
-                ),
-            ],
-            name=f"OCR PDF: {accession_number}",
-            spec=spec,
-        )
-        wf = Workflow(
-            [fw1, fw2, fw3],
-            {fw1: [fw2], fw2: [fw3]},
-            metadata={"accession_number": accession_number},
-            name=accession_number,
-        )
+                    # Open and convert JP2 to JPG
+                    with Image.open(f) as img:
+                        # Convert to RGB if necessary (JP2 might be in different color mode)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
 
+                        # Create JPG filename
+                        jpg_filename = f.stem + '.jpg'
+
+                        # Save to bytes buffer
+                        buffer = io.BytesIO()
+                        img.save(buffer, format='JPEG', quality=95)
+                        buffer.seek(0)
+
+                        filenames.append(jpg_filename)
+                        # Upload JPG version
+                        jpg_key_meadow = "/".join(["p0491p1074eis-1766005955", accession_number,
+                                                   "SOURCE", "jpg", jpg_filename])
+                        jpg_key_impulse = "/".join([accession_number,
+                                                   "SOURCE", "jpg", jpg_filename])
+                        jpg_bytes = buffer.getvalue()
+
+                        s3_keys.append(jpg_key_impulse)
+
+                        s3.upload_fileobj(
+                            io.BytesIO(jpg_bytes),
+                            'meadow-p-ingest',
+                            jpg_key_meadow
+                        )
+
+                        s3_impulse.upload_fileobj(
+                            io.BytesIO(jpg_bytes),
+                            'nu-impulse-production',
+                            jpg_key_impulse
+                        )
+
+                        spec = {"source_s3_key": jpg_key_meadow,
+                                "file_name": f.name,
+                                "accession_number": accession_number}
+
+                        fw = Firework(
+                            tasks=PyTask(
+                                func="auxiliary.surya_on_image",
+                                inputs=["source_s3_key",
+                                        "file_name", "accession_number"],
+                            ),
+                            spec=spec,
+                            name=f"Image {i:010d}"
+                        )
+                        fws.append(fw)
+                        continue
+
+                except Exception as e:
+                    logger.error(f"Failed to convert {f.name} to JPG: {e}")
+            new_identifier = str(accession_number) + \
+                "_" + str(f.name).zfill(10)
+            key_meadow = "/".join(["p0491p1074eis-1766005955",
+                                  accession_number, "SOURCE", f.suffix[1:], f.name])
+
+            key_impulse = "/".join([accession_number,
+                                   "SOURCE", f.suffix[1:], f.name])
+
+            with open(f, 'rb') as data:
+                s3.upload_fileobj(data,
+                                  'meadow-p-ingest', key_meadow
+                                  )
+
+            with open(f, 'rb') as data:
+                s3_impulse.upload_fileobj(
+                    data,
+                    'nu-impulse-production',
+                    key_impulse
+                )
+
+    fw = Firework(
+        tasks=PyTask(
+            func="auxiliary.make_ingest_sheet",
+            inputs=["filenames",
+                    "accession_number"],
+        ),
+        spec={"filenames": filenames,
+              "accession_number": accession_number},
+        name="Make Ingest Sheet"
+    )
+    fws.append(fw)
+
+    fw = Firework(
+        tasks=PyTask(
+            func="auxiliary.image_to_pdf",
+            inputs=["filenames",
+                    "accession_number"],
+        ),
+        spec={"filenames": s3_keys,
+              "accession_number": accession_number},
+        name="Make PDF"
+    )
+    fws.append(fw)
+
+    wf = Workflow(
+        fws,
+        metadata={"accession_number": accession_number},
+        name=accession_number,
+        links_dict={},
+    )
     lp.add_wf(wf)
