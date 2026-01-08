@@ -1,3 +1,5 @@
+![Impulse Logo](logo.png)
+
 # Impulse
 
 Digitization will deliver unprocessed files, I will do binarization/all that jazz
