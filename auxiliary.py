@@ -23,6 +23,7 @@ from surya.recognition import RecognitionPredictor
 from surya.detection import DetectionPredictor
 from my_pads import fp, lp
 import pandas as pd
+
 # Global vars
 conn_str: str
 conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
@@ -31,14 +32,15 @@ fp = fp
 lp = lp
 
 s3 = boto3.client(
-    's3',
+    "s3",
     aws_access_key_id=os.getenv("MEADOW_PROD_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY")
+    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY"),
 )
 
 
 def make_ingest_sheet(*args):
     from io import StringIO, BytesIO
+
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
@@ -47,16 +49,23 @@ def make_ingest_sheet(*args):
         file_accession_numbers.append(f.split("/")[-1].split(".")[0])
 
     df = pd.DataFrame(
-        {"work_type": ["IMAGE" for i in filenames],
-         "work_accession_number": [accession_number for i in filenames],
-         "file_accession_number": [f.replace(".jp2", "") for f in filenames],
-         "filename": ["/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")]) for f in filenames],
-         "description": [f.replace(".jp2", ".jpg") for f in filenames],
-         "role": ["A" for i in filenames],
-         "label": [i for i, f in enumerate(filenames)],
-         "work_image": ["" for i in filenames],
-         "structure": ["/".join([accession_number, "TXT", f.replace(".jpg", ".txt")]) for f in filenames]
-         }
+        {
+            "work_type": ["IMAGE" for i in filenames],
+            "work_accession_number": [accession_number for i in filenames],
+            "file_accession_number": [f.replace(".jp2", "") for f in filenames],
+            "filename": [
+                "/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")])
+                for f in filenames
+            ],
+            "description": [f.replace(".jp2", ".jpg") for f in filenames],
+            "role": ["A" for i in filenames],
+            "label": [i for i, f in enumerate(filenames)],
+            "work_image": ["" for i in filenames],
+            "structure": [
+                "/".join([accession_number, "TXT", f.replace(".jpg", ".txt")])
+                for f in filenames
+            ],
+        }
     )
 
     csv_buffer = StringIO()
@@ -68,21 +77,14 @@ def make_ingest_sheet(*args):
     # Convert StringIO to BytesIO for upload_fileobj
     bytes_buffer = BytesIO(csv_buffer.getvalue().encode())
 
-    ingest_key = "/".join(["p0491p1074eis-1766005955",
-                          accession_number, "ingest.csv"])
+    ingest_key = "/".join(["p0491p1074eis-1766005955", accession_number, "ingest.csv"])
 
-    s3.upload_fileobj(
-        bytes_buffer,
-        "meadow-p-ingest",
-        ingest_key
-    )
+    s3.upload_fileobj(bytes_buffer, "meadow-p-ingest", ingest_key)
     pass
 
 
 def rotate(
-    image: np.ndarray,
-    angle: float,
-    background: Union[int, Tuple[int, int, int]]
+    image: np.ndarray, angle: float, background: Union[int, Tuple[int, int, int]]
 ) -> np.ndarray:
     """
     Rotates an OpenCV image according to an angle,
@@ -104,11 +106,7 @@ def rotate(
     rot_mat[0, 2] += (height - old_height) / 2
 
     return cv2.warpAffine(
-        image,
-        rot_mat,
-        (int(round(height)),
-         int(round(width))),
-        borderValue=background
+        image, rot_mat, (int(round(height)), int(round(width))), borderValue=background
     )
 
 
@@ -128,8 +126,7 @@ def process_historical_document(image_np):
     dst = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
 
     # Otsu’s thresholding (black text on white)
-    otsu_thresh, _ = cv2.threshold(
-        dst, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    otsu_thresh, _ = cv2.threshold(dst, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     adjusted_thresh = otsu_thresh * 1.2
     _, binary = cv2.threshold(dst, adjusted_thresh, 255, cv2.THRESH_BINARY)
     # (Optional) Diagnostic printouts — can be removed
@@ -153,6 +150,46 @@ def get_mongo_client_kwargs():
     }
 
 
+def spacy_experiment(*args):
+    """
+    EXPERIMENTAL.
+
+    This function is experimental and subject to change or removal
+    without notice.
+
+    FireWorks task function: Pull the content of a .txt file from S3,
+    run Spacy NER function on it, upload the NER results back to S3
+    args[0] = s3_key of the METS XML file in S3
+    args[1] = filename
+    args[2] = accession_number
+    """
+
+    import spacy  # import spacy
+
+    s3_impulse = boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
+    )
+
+    s3_key = args[0]
+    filename = args[1]
+    accession_number = args[2]
+
+    # Build out the output file names
+    output_filename = filename.replace(".txt", ".json")
+    ner_s3_key = "/".join([accession_number, "SPACY_NER", output_filename])
+
+    response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
+    data = response["Body"].read()
+    text = " ".join(data).replace("\n", " ")
+
+    nlp = spacy.load("en_core_web_trf")
+    doc = nlp(text)
+
+    return doc
+
+
 def convert_mets_to_yml(*args):
     """
     FireWorks task function: Convert a METS XML file from S3 into a YAML file
@@ -167,15 +204,14 @@ def convert_mets_to_yml(*args):
     accession_number = args[2]
 
     s3_impulse = boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
     )
 
     output_filename = filename.replace(".xml", ".yaml")
     logger.info(f"Value of output filename: {output_filename}")
-    response = s3_impulse.get_object(
-        Bucket="nu-impulse-production", Key=s3_key)
+    response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
     data = response["Body"].read()
 
     # === Step 2: Parse the XML directly from memory ===
@@ -193,8 +229,7 @@ def convert_mets_to_yml(*args):
     }
 
     def find_filename_by_file_id(file_id):
-        node = root.xpath(
-            f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns)
+        node = root.xpath(f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns)
         if not node:
             return None
         href = node[0].get("{http://www.w3.org/1999/xlink}href", "")
@@ -202,8 +237,7 @@ def convert_mets_to_yml(*args):
 
     # === Step 3: Extract header information ===
     mets_hdr = root.xpath("//xmlns:metsHdr", namespaces=ns)
-    capture_date = mets_hdr[0].get(
-        "CREATEDATE") + "-06:00" if mets_hdr else None
+    capture_date = mets_hdr[0].get("CREATEDATE") + "-06:00" if mets_hdr else None
 
     suprascan = False
     scanning_order_rtl = False
@@ -226,12 +260,10 @@ def convert_mets_to_yml(*args):
     yaml_lines.append("image_compression_agent: northwestern")
     yaml_lines.append('image_compression_tool: ["LIMB v4.5.0.0"]')
     yaml_lines.append(
-        f"scanning_order: {
-            'right-to-left' if scanning_order_rtl else 'left-to-right'}"
+        f"scanning_order: {'right-to-left' if scanning_order_rtl else 'left-to-right'}"
     )
     yaml_lines.append(
-        f"reading_order: {
-            'right-to-left' if reading_order_rtl else 'left-to-right'}"
+        f"reading_order: {'right-to-left' if reading_order_rtl else 'left-to-right'}"
     )
     yaml_lines.append("pagedata:")
 
@@ -271,48 +303,54 @@ def convert_mets_to_yml(*args):
             elif parent_label == "Title":
                 label = "TITLE"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Contents":
                 label = "TABLE_OF_CONTENTS"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Preface":
                 label = "PREFACE"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label.startswith("Chapter") or parent_label == "Appendix":
                 label = "CHAPTER_START"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label in ("Notes", "Bibliography"):
                 label = "REFERENCES"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
             elif parent_label == "Index":
                 label = "INDEX"
                 line = (
-                    f'{page_filename}: {{ orderlabel: "{
-                        orderlabel}", label: "{label}" }}'
+                    f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
+                        label
+                    }" }}'
                     if orderlabel
                     else f'{page_filename}: {{ label: "{label}" }}'
                 )
@@ -329,15 +367,16 @@ def convert_mets_to_yml(*args):
     # === Step 5: Write YAML to S3 ===
     yaml_content = "\n".join(yaml_lines)
 
-    s3_output_key = s3_key.rsplit(
-        '/', 1)[0] + '/mets.yaml' if '/' in s3_key else 'mets.yaml'
+    s3_output_key = (
+        s3_key.rsplit("/", 1)[0] + "/mets.yaml" if "/" in s3_key else "mets.yaml"
+    )
 
     try:
         s3_impulse.put_object(
             Bucket="nu-impulse-production",
             Key=s3_output_key,
-            Body=yaml_content.encode('utf-8'),
-            ContentType='application/x-yaml'
+            Body=yaml_content.encode("utf-8"),
+            ContentType="application/x-yaml",
         )
         logger.info(f"Successfully wrote YAML to S3: {s3_output_key}")
     except Exception as e:
@@ -345,8 +384,7 @@ def convert_mets_to_yml(*args):
         raise
 
     return FWAction(
-        update_spec={"yml_s3_key": s3_output_key,
-                     "yml_identifier": accession_number},
+        update_spec={"yml_s3_key": s3_output_key, "yml_identifier": accession_number},
         stored_data={"yml_s3_key": s3_output_key},
     )
 
@@ -426,18 +464,15 @@ def image_to_pdf(*args):
     images = []
 
     s3_impulse = boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
     )
 
     for s3_key in s3_keys:
         logger.info(f"Now running on {s3_key}")
 
-        response = s3_impulse.get_object(
-            Bucket="nu-impulse-production",
-            Key=s3_key
-        )
+        response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
 
         file_contents = response["Body"].read()
 
@@ -469,9 +504,15 @@ def image_to_pdf(*args):
             temp_pdf_path, save_all=True, append_images=images[1:], format="PDF"
         )
         s3_impulse.upload_file(
-            temp_pdf_path, "nu-impulse-production", "/".join([accession_number, "main.pdf"]))
+            temp_pdf_path,
+            "nu-impulse-production",
+            "/".join([accession_number, "main.pdf"]),
+        )
         s3.upload_file(
-            temp_pdf_path, "meadow-p-ingest", "/".join(["p0491p1074eis-1766005955", accession_number, "main.pdf"]))
+            temp_pdf_path,
+            "meadow-p-ingest",
+            "/".join(["p0491p1074eis-1766005955", accession_number, "main.pdf"]),
+        )
 
     return None
 
@@ -490,9 +531,9 @@ def surya_on_image(*args):
     accession_number = args[2]
 
     s3_impulse = boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
     )
 
     output_filename = filename.replace(".jp2", ".txt")
@@ -513,10 +554,12 @@ def surya_on_image(*args):
 
     # Extract text from json
     logger.info("Extracting text.")
-    text_key = "/".join(["p0491p1074eis-1766005955",
-                        accession_number, "TXT", output_filename])
-    confidence_key = "/".join([accession_number,
-                              "CONFIDENCES", output_filename.replace(".txt", ".json")])
+    text_key = "/".join(
+        ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
+    )
+    confidence_key = "/".join(
+        [accession_number, "CONFIDENCES", output_filename.replace(".txt", ".json")]
+    )
     logger.info(f"Saving text to {text_key}")
 
     text_lines = []
@@ -534,7 +577,7 @@ def surya_on_image(*args):
     predictions_bytes = json.dumps(
         predictions_data,
         ensure_ascii=False,  # preserve unicode text
-        indent=2              # optional, for readability
+        indent=2,  # optional, for readability
     ).encode("utf-8")
 
     s3.put_object(
