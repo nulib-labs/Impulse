@@ -165,6 +165,7 @@ def spacy_experiment(*args):
     """
 
     import spacy  # import spacy
+    import json
 
     s3_impulse = boto3.client(
         "s3",
@@ -172,9 +173,9 @@ def spacy_experiment(*args):
         aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
     )
 
-    s3_key = args[0]
-    filename = args[1]
-    accession_number = args[2]
+    s3_key: str = args[0]
+    filename: str = args[1]
+    accession_number: str = args[2]
 
     # Build out the output file names
     output_filename = filename.replace(".txt", ".json")
@@ -186,8 +187,28 @@ def spacy_experiment(*args):
 
     nlp = spacy.load("en_core_web_trf")
     doc = nlp(text)
+    # Save NER as JSON
+    ner_dict = {
+        "text": doc.text,
+        "entities": [
+            {
+                "text": ent.text,
+                "start": ent.start_char,
+                "end": ent.end_char,
+                "label": ent.label_,
+            }
+            for ent in doc.ents
+        ],
+    }
 
-    return doc
+    s3_impulse.put_object(
+        Bucket="nu-impulse-production",
+        Key=ner_s3_key,
+        Body=json.dumps(ner_dict, indent=2, ensure_ascii=False).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    return True
 
 
 def convert_mets_to_yml(*args):
@@ -557,6 +578,9 @@ def surya_on_image(*args):
     text_key = "/".join(
         ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
     )
+    impulse_text_key = "/".join(
+        ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
+    )
     confidence_key = "/".join(
         [accession_number, "CONFIDENCES", output_filename.replace(".txt", ".json")]
     )
@@ -590,7 +614,7 @@ def surya_on_image(*args):
     s3_impulse.put_object(
         Body=text_bytes,
         Bucket="nu-impulse-production",
-        Key=text_key,
+        Key=impulse_text_key,
         ContentType="application/json",
     )
     s3_impulse.put_object(
