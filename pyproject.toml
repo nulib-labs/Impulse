@@ -9,6 +9,8 @@ dependencies = [
     "boto3>=1.42.2",
     "bs4>=0.0.2",
     "deskew>=1.5.3",
+    "en-core-web-sm",
+    "en-core-web-trf",
     "fabric>=3.2.2",
     "fireworks>=2.0.5",
     "igraph>=1.0.0",
@@ -19,11 +21,17 @@ dependencies = [
     "pandas>=2.3.3",
     "pdf2image>=1.17.0",
     "pillow>=10.4.0",
+    "pip>=25.3",
     "plotly>=6.3.1",
     "pymongo>=4.15.2",
     "pypdf2>=3.0.1",
     "python-doctr>=1.0.0",
     "sentence-transformers>=5.1.1",
+    "spacy>=3.8.11",
     "transformers>=4.57.0",
     "woolworm>=0.0.9",
 ]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
+en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0.tar.gz" }
