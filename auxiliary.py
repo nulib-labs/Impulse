@@ -52,7 +52,7 @@ def make_ingest_sheet(*args):
         {
             "work_type": ["IMAGE" for i in filenames],
             "work_accession_number": [accession_number for i in filenames],
-            "file_accession_number": [f.replace(".jp2", "") for f in filenames],
+            "file_accession_number": [str(Path(f)).stem for f in filenames],
             "filename": [
                 "/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")])
                 for f in filenames
@@ -177,13 +177,18 @@ def spacy_experiment(*args):
     filename: str = args[1]
     accession_number: str = args[2]
 
+    print(s3_key)
+    print(filename)
+    print(accession_number)
+
     # Build out the output file names
     output_filename = filename.replace(".txt", ".json")
     ner_s3_key = "/".join([accession_number, "SPACY_NER", output_filename])
 
     response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
-    data = response["Body"].read()
-    text = " ".join(data).replace("\n", " ")
+    data: bytes = response["Body"].read()
+    print(type(data))
+    text = data.decode("utf-8").replace("\n", " ")
 
     nlp = spacy.load("en_core_web_trf")
     doc = nlp(text)
