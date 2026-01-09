@@ -40,7 +40,7 @@ s3 = boto3.client(
 
 def make_ingest_sheet(*args):
     from io import StringIO, BytesIO
-
+    from pathlib import Path
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
@@ -52,7 +52,7 @@ def make_ingest_sheet(*args):
         {
             "work_type": ["IMAGE" for i in filenames],
             "work_accession_number": [accession_number for i in filenames],
-            "file_accession_number": [str(Path(f)).stem for f in filenames],
+            "file_accession_number": [str(Path(f).stem) for f in filenames],
             "filename": [
                 "/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")])
                 for f in filenames
