@@ -40,7 +40,7 @@ s3 = boto3.client(
 
 def make_ingest_sheet(*args):
     from io import StringIO, BytesIO
-
+    from pathlib import Path
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
@@ -52,7 +52,7 @@ def make_ingest_sheet(*args):
         {
             "work_type": ["IMAGE" for i in filenames],
             "work_accession_number": [accession_number for i in filenames],
-            "file_accession_number": [f.replace(".jp2", "") for f in filenames],
+            "file_accession_number": [str(Path(f).stem) for f in filenames],
             "filename": [
                 "/".join([accession_number, "SOURCE", "jpg", f.replace(".jp2", ".jpg")])
                 for f in filenames
@@ -165,6 +165,7 @@ def spacy_experiment(*args):
     """
 
     import spacy  # import spacy
+    import json
 
     s3_impulse = boto3.client(
         "s3",
@@ -172,22 +173,47 @@ def spacy_experiment(*args):
         aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
     )
 
-    s3_key = args[0]
-    filename = args[1]
-    accession_number = args[2]
+    s3_key: str = args[0]
+    filename: str = args[1]
+    accession_number: str = args[2]
+
+    print(s3_key)
+    print(filename)
+    print(accession_number)
 
     # Build out the output file names
     output_filename = filename.replace(".txt", ".json")
     ner_s3_key = "/".join([accession_number, "SPACY_NER", output_filename])
 
     response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
-    data = response["Body"].read()
-    text = " ".join(data).replace("\n", " ")
+    data: bytes = response["Body"].read()
+    print(type(data))
+    text = data.decode("utf-8").replace("\n", " ")
 
     nlp = spacy.load("en_core_web_trf")
     doc = nlp(text)
+    # Save NER as JSON
+    ner_dict = {
+        "text": doc.text,
+        "entities": [
+            {
+                "text": ent.text,
+                "start": ent.start_char,
+                "end": ent.end_char,
+                "label": ent.label_,
+            }
+            for ent in doc.ents
+        ],
+    }
 
-    return doc
+    s3_impulse.put_object(
+        Bucket="nu-impulse-production",
+        Key=ner_s3_key,
+        Body=json.dumps(ner_dict, indent=2, ensure_ascii=False).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    return True
 
 
 def convert_mets_to_yml(*args):
@@ -557,6 +583,9 @@ def surya_on_image(*args):
     text_key = "/".join(
         ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
     )
+    impulse_text_key = "/".join(
+        ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
+    )
     confidence_key = "/".join(
         [accession_number, "CONFIDENCES", output_filename.replace(".txt", ".json")]
     )
@@ -590,7 +619,7 @@ def surya_on_image(*args):
     s3_impulse.put_object(
         Body=text_bytes,
         Bucket="nu-impulse-production",
-        Key=text_key,
+        Key=impulse_text_key,
         ContentType="application/json",
     )
     s3_impulse.put_object(
