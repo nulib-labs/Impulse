@@ -88,12 +88,12 @@ def convert_jpg_to_jp2_in_s3(
 
             new_key = "/".join([accession_number, "JP2000", filename_page])
             # Upload JP2 file to destination bucket
-            # s3.put_object(
-            #     Bucket=dest_bucket,
-            #     Key=new_key,
-            #     Body=jp2_buffer.getvalue(),
-            #     ContentType="image/jp2",
-            # )
+            s3.put_object(
+                Bucket=dest_bucket,
+                Key=new_key,
+                Body=jp2_buffer.getvalue(),
+                ContentType="image/jp2",
+            )
             converted_count += 1
 
         except Exception as e:
