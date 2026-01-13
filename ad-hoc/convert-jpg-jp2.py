@@ -83,9 +83,10 @@ def convert_jpg_to_jp2_in_s3(
 
             accession_number: str = key.split("/")[0]
             filename: str = key.split("/")[-1].replace(".jpg", ".jp2")
+            filename_page: str = filename.split("_")[-1]
             # Create new key with .jp2 extension
 
-            new_key = "/".join([accession_number, "JP2000", filename])
+            new_key = "/".join([accession_number, "JP2000", filename_page])
             # Upload JP2 file to destination bucket
             # s3.put_object(
             #     Bucket=dest_bucket,
@@ -93,8 +94,6 @@ def convert_jpg_to_jp2_in_s3(
             #     Body=jp2_buffer.getvalue(),
             #     ContentType="image/jp2",
             # )
-            print("new key: ", new_key)
-            exit()
             converted_count += 1
 
         except Exception as e:
@@ -115,7 +114,7 @@ if __name__ == "__main__":
     AWS_SECRET_ACCESS_KEY = os.getenv(
         "IMPULSE_SECRET_ACCESS_KEY"
     )  # Your AWS Secret Access Key
-    AWS_REGION = "us-east-1"  # Your AWS region
+    AWS_REGION = "us-east-2"  # Your AWS region
 
     # Option 2: Leave empty to use default credentials from:
     # - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
