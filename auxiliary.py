@@ -41,6 +41,7 @@ s3 = boto3.client(
 def make_ingest_sheet(*args):
     from io import StringIO, BytesIO
     from pathlib import Path
+
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
@@ -583,9 +584,7 @@ def surya_on_image(*args):
     text_key = "/".join(
         ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
     )
-    impulse_text_key = "/".join(
-        ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
-    )
+    impulse_text_key = "/".join([accession_number, "TXT", output_filename])
     confidence_key = "/".join(
         [accession_number, "CONFIDENCES", output_filename.replace(".txt", ".json")]
     )
