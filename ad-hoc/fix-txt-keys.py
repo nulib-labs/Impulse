@@ -1,6 +1,6 @@
 import boto3
 
-session = boto3.Session(profile_name="impulse")
+session = boto3.Session(profile_name="")
 s3_client = session.client("s3")
 paginator = s3_client.get_paginator("list_objects_v2")
 pages = paginator.paginate(

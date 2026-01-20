@@ -57,22 +57,26 @@ def download_jpg_files(bucket_name, txt_keys, s3_client, download_dir="downloads
     failed = 0
 
     for txt_key in txt_keys:
+        print("Value of txt_key: ", txt_key)
         # Replace .TXT extension with .JPG
-        jgp_key = txt_key.replace("TXT", "jpg")
-        jpg_key = (
-            txt_key[:-4] + ".JPG"
-            if txt_key.upper().endswith(".TXT")
-            else txt_key + ".JPG"
-        )
+        #
+        jpg_key = txt_key.replace("TXT", "jpg")
+        jpg_key = jpg_key.replace("txt", "jpg")
+
+        print("Value of jpg_key: ", jpg_key)
 
         # Create local file path
-        local_filename = os.path.join(download_dir, os.path.basename(jpg_key))
-
+        txt_local_filename = os.path.join(download_dir, os.path.basename(txt_key))
+        jpg_local_filename = os.path.join(download_dir, os.path.basename(jpg_key))
+        print(txt_local_filename)
         try:
             print(f"Downloading: {jpg_key}")
-            s3.download_file(bucket_name, jpg_key, local_filename)
+            s3.download_file(bucket_name, txt_key, txt_local_filename)
+            s3.download_file(
+                bucket_name, jpg_key, jpg_local_filename.replace(".txt", ".jpg")
+            )
             downloaded += 1
-            print(f"  ✓ Saved to: {local_filename}")
+            print(f"  ✓ Saved to: {jpg_local_filename}")
         except s3.exceptions.NoSuchKey:
             print(f"  ✗ JPG file not found: {jpg_key}")
             failed += 1
