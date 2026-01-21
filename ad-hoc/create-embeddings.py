@@ -72,7 +72,7 @@ def main():
     texts = download_texts(BUCKET_NAME, txt_keys)
 
     print("Loading model on GPU...")
-    model = SentenceTransformer(MODEL_NAME, device="cpu", trust_remote_code=True)
+    model = SentenceTransformer(MODEL_NAME, device="cuda", trust_remote_code=True)
 
     print("Encoding texts...")
     attn_implementation = "eager"  # Or "flash_attention_2"
