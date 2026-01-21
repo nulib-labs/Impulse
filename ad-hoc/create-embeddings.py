@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from typing import List
-
+import os
 import boto3
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
@@ -14,7 +14,10 @@ PREFIX = "P0491_35556036056489"  # e.g. "corpus/texts/"
 BATCH_SIZE = 128  # tune based on GPU memory
 AWS_PROFILE = "impulse"
 MODEL_NAME = "nvidia/llama-embed-nemotron-8b"
-session = boto3.Session(profile_name=AWS_PROFILE)
+session = boto3.Session(
+    aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
+)
 s3 = session.client("s3")
 
 
