@@ -41,6 +41,7 @@ s3 = boto3.client(
 def make_ingest_sheet(*args):
     from io import StringIO, BytesIO
     from pathlib import Path
+
     logger.info(f"Ingest sheet args: {args}")
     filenames: str = args[0]
     accession_number = args[1]
@@ -541,6 +542,49 @@ def image_to_pdf(*args):
         )
 
     return None
+
+
+def embed_documents(*args):
+    """
+    This feature is experimental. Design will change.
+    Adds a marker to each page of a PDF.
+    args[0] = S3 Key of the Image
+    """
+    from PIL import Image
+    from io import BytesIO
+    import json
+    from sentence_transformers import SentenceTransformer
+    import requests
+
+    s3_impulse = boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
+    )
+
+    s3_key = args[0]
+    filename: str = args[1]
+    accession_number = args[2]
+
+    attn_implementation = "eager"  # Or "flash_attention_2"
+    model = SentenceTransformer(
+        "nvidia/llama-embed-nemotron-8b",
+        trust_remote_code=True,
+        model_kwargs={
+            "attn_implementation": attn_implementation,
+            "torch_dtype": "bfloat16",
+        },
+        tokenizer_kwargs={"padding_side": "left"},
+    )
+
+    response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
+
+    "https://nu-impulse-production.s3.us-east-1.amazonaws.com/P0491_35556036056489/TXT/35556036056489_00000002.txt"
+    response = requests.get(
+        "https://nu-impulse-production.s3.us-east-1.amazonaws.com/" + s3_key
+    )
+
+    content = response.content
 
 
 def surya_on_image(*args):
