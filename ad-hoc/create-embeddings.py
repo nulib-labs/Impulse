@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Iterable
 import os
 import boto3
+import torch
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
@@ -10,10 +11,12 @@ from tqdm import tqdm
 # Configuration
 # -----------------------
 BUCKET_NAME = "nu-impulse-production"
-PREFIX = "P0491_35556036056489"  # e.g. "corpus/texts/"
-BATCH_SIZE = 128  # tune based on GPU memory
+PREFIX = "P0491_35556036056489"
+BATCH_SIZE = 128  # GPU batch size
+KEY_CHUNK_SIZE = 2048  # <-- what you asked for
 AWS_PROFILE = "impulse"
 MODEL_NAME = "nvidia/llama-embed-nemotron-8b"
+
 session = boto3.Session(
     aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
@@ -22,12 +25,17 @@ s3 = session.client("s3")
 
 
 # -----------------------
-# S3 helpers
+# Helpers
 # -----------------------
+def chunked(iterable: List[str], size: int) -> Iterable[List[str]]:
+    for i in range(0, len(iterable), size):
+        yield iterable[i : i + size]
+
+
 def list_txt_keys(bucket: str, prefix: str = "") -> List[str]:
     paginator = s3.get_paginator("list_objects_v2")
-
     keys = []
+
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             if obj["Key"].endswith(".txt"):
@@ -40,21 +48,19 @@ def download_texts(bucket: str, keys: List[str]) -> List[str]:
     for key in keys:
         obj = s3.get_object(Bucket=bucket, Key=key)
         texts.append(obj["Body"].read().decode("utf-8"))
-
-    print(texts)
     return texts
 
 
 def upload_embeddings(bucket: str, keys: List[str], embeddings):
     for key, emb in zip(keys, embeddings):
         json_key = str(Path(key).with_suffix(".json"))
-
         payload = {
             "source_txt": key,
             "model": MODEL_NAME,
             "embedding": emb.tolist(),
         }
-        print(f"Now uploading payload to {key}")
+
+        # Uncomment when ready
         # s3.put_object(
         #     Bucket=bucket,
         #     Key=json_key,
@@ -71,33 +77,37 @@ def main():
     txt_keys = list_txt_keys(BUCKET_NAME, PREFIX)
     print(f"Found {len(txt_keys)} files")
 
-    print("Downloading texts...")
-    texts = download_texts(BUCKET_NAME, txt_keys)
-
     print("Loading model on GPU...")
-    model = SentenceTransformer(MODEL_NAME, device="cuda", trust_remote_code=True)
-
-    print("Encoding texts...")
-    attn_implementation = "eager"  # Or "flash_attention_2"
     model = SentenceTransformer(
         MODEL_NAME,
         trust_remote_code=True,
         model_kwargs={
-            "attn_implementation": attn_implementation,
-            "torch_dtype": "bfloat16",
+            "attn_implementation": "eager",  # safer than flash for memory
+            "torch_dtype": torch.bfloat16,
         },
         tokenizer_kwargs={"padding_side": "left"},
-    )
-    embeddings = model.encode(
-        texts,
-        batch_size=BATCH_SIZE,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
+        device="cuda",
     )
 
-    print("Uploading embeddings...")
-    upload_embeddings(BUCKET_NAME, txt_keys, embeddings)
+    for i, key_chunk in enumerate(chunked(txt_keys, KEY_CHUNK_SIZE), start=1):
+        print(f"\nProcessing chunk {i} ({len(key_chunk)} files)")
+
+        texts = download_texts(BUCKET_NAME, key_chunk)
+
+        with torch.no_grad():
+            embeddings = model.encode(
+                texts,
+                batch_size=BATCH_SIZE,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+
+        upload_embeddings(BUCKET_NAME, key_chunk, embeddings)
+
+        # ---- cleanup (VERY IMPORTANT) ----
+        del texts, embeddings
+        torch.cuda.empty_cache()
 
     print("Done!")
 
