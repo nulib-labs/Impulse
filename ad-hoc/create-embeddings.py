@@ -89,7 +89,7 @@ def main():
         device="cuda",
     )
 
-    for i, key_chunk in enumerate(chunked(txt_keys, KEY_CHUNK_SIZE), start=1):
+    for i, key_chunk in tqdm(enumerate(chunked(txt_keys, KEY_CHUNK_SIZE), start=1)):
         print(f"\nProcessing chunk {i} ({len(key_chunk)} files)")
 
         texts = download_texts(BUCKET_NAME, key_chunk)
