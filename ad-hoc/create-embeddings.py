@@ -12,8 +12,8 @@ from tqdm import tqdm
 # -----------------------
 BUCKET_NAME = "nu-impulse-production"
 PREFIX = ""
-BATCH_SIZE = 256  # GPU batch size
-KEY_CHUNK_SIZE = 4096  # <-- what you asked for
+BATCH_SIZE = 32  # GPU batch size
+KEY_CHUNK_SIZE = 512  # <-- what you asked for
 AWS_PROFILE = "impulse"
 MODEL_NAME = "nvidia/llama-embed-nemotron-8b"
 
