@@ -78,6 +78,8 @@ def main():
     print(f"Found {len(txt_keys)} files")
 
     print("Loading model on GPU...")
+    MAX_SEQ_LEN = 1024
+
     model = SentenceTransformer(
         MODEL_NAME,
         trust_remote_code=True,
@@ -86,14 +88,15 @@ def main():
             "torch_dtype": torch.bfloat16,
         },
         tokenizer_kwargs={
-            "padding_side": "left",
+            "padding": True,
             "truncation": True,
-            "max_length": 2048,  # <= IMPORTANT
+            "max_length": MAX_SEQ_LEN,
+            "padding_side": "right",
         },
         device="cuda",
     )
 
-    model.max_seq_length = 4096
+    model.max_seq_length = MAX_SEQ_LEN
 
     for i, key_chunk in tqdm(enumerate(chunked(txt_keys, KEY_CHUNK_SIZE), start=1)):
         print(f"\nProcessing chunk {i} ({len(key_chunk)} files)")
