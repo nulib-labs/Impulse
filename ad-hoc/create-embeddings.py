@@ -11,9 +11,9 @@ from tqdm import tqdm
 # Configuration
 # -----------------------
 BUCKET_NAME = "nu-impulse-production"
-PREFIX = "P0491_35556036056489"
-BATCH_SIZE = 128  # GPU batch size
-KEY_CHUNK_SIZE = 2048  # <-- what you asked for
+PREFIX = ""
+BATCH_SIZE = 256  # GPU batch size
+KEY_CHUNK_SIZE = 4096  # <-- what you asked for
 AWS_PROFILE = "impulse"
 MODEL_NAME = "nvidia/llama-embed-nemotron-8b"
 
@@ -61,12 +61,12 @@ def upload_embeddings(bucket: str, keys: List[str], embeddings):
         }
 
         # Uncomment when ready
-        # s3.put_object(
-        #     Bucket=bucket,
-        #     Key=json_key,
-        #     Body=json.dumps(payload),
-        #     ContentType="application/json",
-        # )
+        s3.put_object(
+            Bucket=bucket,
+            Key=json_key,
+            Body=json.dumps(payload),
+            ContentType="application/json",
+        )
 
 
 # -----------------------
