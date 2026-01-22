@@ -88,7 +88,7 @@ def main():
         tokenizer_kwargs={
             "padding_side": "left",
             "truncation": True,
-            "max_length": 4096,  # <= IMPORTANT
+            "max_length": 2048,  # <= IMPORTANT
         },
         device="cuda",
     )
