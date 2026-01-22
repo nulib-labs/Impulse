@@ -82,12 +82,18 @@ def main():
         MODEL_NAME,
         trust_remote_code=True,
         model_kwargs={
-            "attn_implementation": "eager",  # safer than flash for memory
+            "attn_implementation": "eager",
             "torch_dtype": torch.bfloat16,
         },
-        tokenizer_kwargs={"padding_side": "left"},
+        tokenizer_kwargs={
+            "padding_side": "left",
+            "truncation": True,
+            "max_length": 4096,  # <= IMPORTANT
+        },
         device="cuda",
     )
+
+    model.max_seq_length = 4096
 
     for i, key_chunk in tqdm(enumerate(chunked(txt_keys, KEY_CHUNK_SIZE), start=1)):
         print(f"\nProcessing chunk {i} ({len(key_chunk)} files)")
