@@ -12,14 +12,14 @@ from pathlib import Path
 import boto3
 
 s3 = boto3.client(
-    's3',
+    "s3",
     aws_access_key_id=os.getenv("MEADOW_PROD_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY")
+    aws_secret_access_key=os.getenv("MEADOW_PROD_SECRET_ACCESS_KEY"),
 )
 s3_impulse = boto3.client(
-    's3',
+    "s3",
     aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY")
+    aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
 )
 
 parser = argparse.ArgumentParser()
@@ -88,8 +88,7 @@ files = []
 if is_recursive:
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**",
-                      f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
         )
     files = sorted(files)
     print(files)
@@ -98,39 +97,38 @@ if is_recursive:
 else:
     for suffix in suffixes:
         files.extend(
-            glob.glob(os.path.join(input_path, "**",
-                      f"*.{suffix}"), recursive=True)
+            glob.glob(os.path.join(input_path, "**", f"*.{suffix}"), recursive=True)
         )
     print(files)
     fws = []
     specs = []
     filenames = []
     s3_keys = []
-    for i, f in tqdm(enumerate(sorted(files)), desc="Uploading files...", total=len(files)):
+    for i, f in tqdm(
+        enumerate(sorted(files)), desc="Uploading files...", total=len(files)
+    ):
         f = Path(f)  # Make f a path
 
         # If f is an image path
         if f.suffix.lower() in [".jpg", ".png", ".jpeg", ".tiff", ".jp2", ".xml"]:
             if f.suffix.lower() == ".xml":
                 import io
+
                 with open(f, "rb") as data:
                     xml_key = "/".join([accession_number, "mets.xml"])
-                    s3_impulse.upload_fileobj(
-                        data,
-                        'nu-impulse-production',
-                        xml_key
-                    )
-                spec = {"source_s3_key": xml_key,
-                        "file_name": f.name,
-                        "accession_number": accession_number}
+                    s3_impulse.upload_fileobj(data, "nu-impulse-production", xml_key)
+                spec = {
+                    "source_s3_key": xml_key,
+                    "file_name": f.name,
+                    "accession_number": accession_number,
+                }
                 fw = Firework(
                     tasks=PyTask(
                         func="auxiliary.convert_mets_to_yml",
-                        inputs=["source_s3_key",
-                                "file_name", "accession_number"],
+                        inputs=["source_s3_key", "file_name", "accession_number"],
                     ),
                     spec=spec,
-                    name=f"Convert METSXML to YAML"
+                    name=f"Convert METSXML to YAML",
                 )
                 fws.append(fw)
 
@@ -142,105 +140,115 @@ else:
                     # Open and convert JP2 to JPG
                     with Image.open(f) as img:
                         # Convert to RGB if necessary (JP2 might be in different color mode)
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
 
                         # Create JPG filename
-                        jpg_filename = f.stem + '.jpg'
+                        jpg_filename = f.stem + ".jpg"
 
                         # Save to bytes buffer
                         buffer = io.BytesIO()
-                        img.save(buffer, format='JPEG', quality=95)
+                        img.save(buffer, format="JPEG", quality=95)
                         buffer.seek(0)
 
                         filenames.append(jpg_filename)
                         # Upload JPG version
-                        jpg_key_meadow = "/".join(["p0491p1074eis-1766005955", accession_number,
-                                                   "SOURCE", "jpg", jpg_filename])
-                        jpg_key_impulse = "/".join([accession_number,
-                                                   "SOURCE", "jpg", jpg_filename])
+                        jpg_key_meadow = "/".join(
+                            [
+                                "p0491p1074eis-1766005955",
+                                accession_number,
+                                "SOURCE",
+                                "jpg",
+                                jpg_filename,
+                            ]
+                        )
+                        jpg_key_impulse = "/".join(
+                            [accession_number, "SOURCE", "jpg", jpg_filename]
+                        )
                         jpg_bytes = buffer.getvalue()
 
                         s3_keys.append(jpg_key_impulse)
 
                         s3.upload_fileobj(
-                            io.BytesIO(jpg_bytes),
-                            'meadow-p-ingest',
-                            jpg_key_meadow
+                            io.BytesIO(jpg_bytes), "meadow-p-ingest", jpg_key_meadow
                         )
 
                         s3_impulse.upload_fileobj(
                             io.BytesIO(jpg_bytes),
-                            'nu-impulse-production',
-                            jpg_key_impulse
+                            "nu-impulse-production",
+                            jpg_key_impulse,
                         )
 
-                        spec = {"source_s3_key": jpg_key_meadow,
-                                "file_name": f.name,
-                                "accession_number": accession_number}
+                        spec = {
+                            "source_s3_key": jpg_key_meadow,
+                            "file_name": f.name,
+                            "accession_number": accession_number,
+                        }
 
                         fw = Firework(
                             tasks=PyTask(
                                 func="auxiliary.surya_on_image",
-                                inputs=["source_s3_key",
-                                        "file_name", "accession_number"],
+                                inputs=[
+                                    "source_s3_key",
+                                    "file_name",
+                                    "accession_number",
+                                ],
                             ),
                             spec=spec,
-                            name=f"Image {i:010d}"
+                            name=f"Image {i:010d}",
                         )
                         fws.append(fw)
                         continue
 
                 except Exception as e:
                     logger.error(f"Failed to convert {f.name} to JPG: {e}")
-            new_identifier = str(accession_number) + \
-                "_" + str(f.name).zfill(10)
-            key_meadow = "/".join(["p0491p1074eis-1766005955",
-                                  accession_number, "SOURCE", f.suffix[1:], f.name])
+            new_identifier = str(accession_number) + "_" + str(f.name).zfill(10)
+            key_meadow = "/".join(
+                [
+                    "p0491p1074eis-1766005955",
+                    accession_number,
+                    "SOURCE",
+                    f.suffix[1:],
+                    f.name,
+                ]
+            )
 
-            key_impulse = "/".join([accession_number,
-                                   "SOURCE", f.suffix[1:], f.name])
+            key_impulse = "/".join([accession_number, "SOURCE", f.suffix[1:], f.name])
 
-            with open(f, 'rb') as data:
-                s3.upload_fileobj(data,
-                                  'meadow-p-ingest', key_meadow
-                                  )
+            with open(f, "rb") as data:
+                s3.upload_fileobj(data, "meadow-p-ingest", key_meadow)
 
-            with open(f, 'rb') as data:
-                s3_impulse.upload_fileobj(
-                    data,
-                    'nu-impulse-production',
-                    key_impulse
-                )
+            with open(f, "rb") as data:
+                s3_impulse.upload_fileobj(data, "nu-impulse-production", key_impulse)
 
-    fw = Firework(
+    ocr_fw_ids = [i.fw_id for i in fws]
+    print(ocr_fw_ids)
+    ingest_sheet_fw = Firework(
         tasks=PyTask(
             func="auxiliary.make_ingest_sheet",
-            inputs=["filenames",
-                    "accession_number"],
+            inputs=["filenames", "accession_number"],
         ),
-        spec={"filenames": filenames,
-              "accession_number": accession_number},
-        name="Make Ingest Sheet"
+        spec={"filenames": filenames, "accession_number": accession_number},
+        name="Make Ingest Sheet",
     )
-    fws.append(fw)
+    fws.append(ingest_sheet_fw)
 
-    fw = Firework(
+    make_pdf_fw = Firework(
         tasks=PyTask(
             func="auxiliary.image_to_pdf",
-            inputs=["filenames",
-                    "accession_number"],
+            inputs=["filenames", "accession_number"],
         ),
-        spec={"filenames": s3_keys,
-              "accession_number": accession_number},
-        name="Make PDF"
+        spec={"filenames": s3_keys, "accession_number": accession_number},
+        name="Make PDF",
     )
-    fws.append(fw)
+    fws.append(make_pdf_fw)
 
     wf = Workflow(
         fws,
         metadata={"accession_number": accession_number},
         name=accession_number,
-        links_dict={},
+        links_dict={ingest_sheet_fw.fw_id: ocr_fw_ids},
     )
-    lp.add_wf(wf)
+
+    print(wf)
+    # lp.add_wf(wf)
