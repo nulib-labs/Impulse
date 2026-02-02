@@ -1,0 +1,5 @@
+spec:
+  _tasks:
+  - _fw_name: "Binarization Task"
+  path: "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000009.jp2"
+  output_path: "/home/ayn/Work/Impulse/my_image.jpg"
