@@ -8,6 +8,7 @@ from typing_extensions import override
 from loguru import logger
 from fireworks.utilities.filepad import FilePad
 import os
+from uuid import uuid4
 
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
@@ -122,7 +123,9 @@ class BinarizationTask(FireTaskBase):
                 with open(path, "rb") as f:
                     content = f.read()
                 binarized = self._binarize(content)
-            id, identifier = fp.add_contents(binarized)
+            id, identifier = fp.add_contents(
+                binarized, identifier=f"binarized:{path}:{uuid4()}"
+            )
         return FWAction()
 
 
