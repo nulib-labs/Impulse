@@ -110,31 +110,39 @@ class BinarizationTask(FireTaskBase):
         This method runs the binarization task.
         This task takes one spec entry: `path` of type `str`
         """
-        path_array: str = fw_spec["path_array"]
+        path_array_key = fw_spec["find_path_array_in"]
+        path_array: str = fw_spec[path_array_key]
+        binarized_objects: list[tuple[str, str]]
+        binarized_objects = []
         for path in path_array:
             logger.info(f"`path` is {path}")
             if self.is_s3_path(path):
-                # Get content from S3
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 binarized = self._binarize(content)
             else:
-                # Handle local file path
                 with open(path, "rb") as f:
                     content = f.read()
                 binarized = self._binarize(content)
             id, identifier = fp.add_contents(
-                binarized, identifier=f"binarized:{path}:{uuid4()}"
+                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
             )
-        return FWAction()
+            binarized_objects.append((id, identifier))
+
+        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
+        return FWAction(
+            mod_spec=[
+                {"_push": {"binarized_objects": binarized_object}}
+                for binarized_object in binarized_objects
+            ]
+        )
 
 
 class OCRTask(FireTaskBase):
     _fw_name = "OCR Task"
-    path_array: list[str]
 
     @staticmethod
-    def _predict(content):
+    def _predict(contents):
         from surya.foundation import FoundationPredictor
         from surya.recognition import RecognitionPredictor
         from surya.detection import DetectionPredictor
@@ -146,9 +154,15 @@ class OCRTask(FireTaskBase):
         recognition_predictor = RecognitionPredictor(foundation_predictor)
         detection_predictor = DetectionPredictor()
         predictions = recognition_predictor(
-            [Image.open(BytesIO(content))], det_predictor=detection_predictor
+            [Image.open(BytesIO(contents))], det_predictor=detection_predictor
         )
         return predictions
+
+    @staticmethod
+    def get_filepad_contents(gfs_id):
+        contents, doc = fp.get_file_by_id(gfs_id)
+
+        return contents
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -199,20 +213,40 @@ class OCRTask(FireTaskBase):
 
         return buffer.read()
 
+    @staticmethod
+    def is_impulse_identifier(value: str) -> bool:
+        """
+        Checks if value is impulse identifier.
+        """
+
+        if "impulse:" in value:
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def get_file_from_filepad(identifier):
+        return fp
+
     @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+    def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """
-        This method runs the binarization task.
-        This task takes one spec entry: `path` of type `str`
+        This method runs the OCR task.
+        This method looks for `path_array`.
         """
+        find_path_array_in = fw_spec["find_path_array_in"]
+        path_array: list[tuple(str, str)] = fw_spec[find_path_array_in]
+        logger.debug(f"Value of `path_array`:{path_array}")
+        logger.debug(f"Type of `path_array`:{path_array}")
         for path in path_array:
-            path: str = fw_spec["path"]
-            output_path: str = fw_spec.get("output_path", None)
-            logger.info(f"`path` is {path}")
-            logger.info(f"`output_path` is {output_path}")
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
+                content = self.get_s3_content(path)
+                predictions = self._predict(content)
+                logger.info(f"Predictions:\n{predictions}")
+            elif self.is_impulse_identifier(path[-1]):
+                logger.info("Detected Impulse identifier")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
                 logger.info(f"Predictions:\n{predictions}")

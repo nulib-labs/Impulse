@@ -36,3 +36,17 @@ dependencies = [
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
 en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0.tar.gz" }
 fireworks = { git = "https://github.com/aerithnetzer/fireworks" }
+[tool.basedpyright]
+typeCheckingMode = "off"
+diagnosticMode = "openFilesOnly"
+useLibraryCodeForTypes = false
+
+exclude = [
+  "**/node_modules",
+  "**/__pycache__",
+  "**/.venv",
+  "**/.tox",
+  "**/dist",
+  "**/build",
+  "**/.git",
+]

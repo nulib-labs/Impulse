@@ -3,6 +3,7 @@ fws:
 - fw_id: 1
   name: "Binarization"
   spec:
+    find_path_array_in: "path_array"
     _tasks:
     - _fw_name: Binarization Task
     path_array: 
@@ -18,18 +19,9 @@ fws:
 - fw_id: 2
   name: OCR
   spec:
+    find_path_array_in: "binarized_objects"
     _tasks:
     - _fw_name: OCR Task
-    path_array: 
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000001.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000002.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000003.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000004.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000005.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000006.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000007.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000008.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000009.jp2"
 links:
   1:
   - 2
