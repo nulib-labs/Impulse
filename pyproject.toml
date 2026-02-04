@@ -3,14 +3,12 @@ name = "impulse"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "==3.12.12"
 dependencies = [
     "accelerate>=1.12.0",
     "boto3>=1.42.2",
     "bs4>=0.0.2",
     "deskew>=1.5.3",
-    "en-core-web-sm",
-    "en-core-web-trf",
     "fabric>=3.2.2",
     "fireworks>=2.0.5",
     "igraph>=1.0.0",
@@ -32,6 +30,17 @@ dependencies = [
     "woolworm>=0.0.9",
 ]
 
-[tool.uv.sources]
-en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0.tar.gz" }
-en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0.tar.gz" }
+[tool.basedpyright]
+typeCheckingMode = "off"
+diagnosticMode = "openFilesOnly"
+useLibraryCodeForTypes = false
+
+exclude = [
+  "**/node_modules",
+  "**/__pycache__",
+  "**/.venv",
+  "**/.tox",
+  "**/dist",
+  "**/build",
+  "**/.git",
+]
