@@ -64,7 +64,7 @@ fw_name = args.fw_name
 do_reset = args.reset
 
 
-conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+conn_str = str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"))
 lp = LaunchPad(
     host=conn_str,
     port=27017,
@@ -251,4 +251,4 @@ else:
     )
 
     print(wf)
-    # lp.add_wf(wf)
+    lp.add_wf(wf)
