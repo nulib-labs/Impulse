@@ -3,12 +3,11 @@ import re
 import boto3
 from io import BytesIO
 from fireworks.core.firework import FWAction, FireTaskBase
-from fireworks.user_objects.firetasks.filepad_tasks import AddFilesTask
-from typing_extensions import override
 from loguru import logger
 from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
+
 
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
@@ -49,6 +48,7 @@ class BinarizationTask(FireTaskBase):
             grayscale_content_array, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
         adjusted_thresh = otsu_thresh * 1.2
+
         _, binary_content_array = cv2.threshold(
             grayscale_content_array, adjusted_thresh, 255, cv2.THRESH_BINARY
         )
@@ -138,8 +138,8 @@ class BinarizationTask(FireTaskBase):
         )
 
 
-class OCRTask(FireTaskBase):
-    _fw_name = "OCR Task"
+class DocumentExtractionTask(FireTaskBase):
+    _fw_name = "Document Extraction Task"
 
     @staticmethod
     def _predict(contents):

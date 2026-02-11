@@ -21,7 +21,7 @@ fws:
   spec:
     find_path_array_in: "binarized_objects"
     _tasks:
-    - _fw_name: OCR Task
+    - _fw_name: Document Extraction Task
 links:
   1:
   - 2
