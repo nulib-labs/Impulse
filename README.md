@@ -1,3 +1,12 @@
+# Now 100% sugar free
+
+## New features
+
+**Impulse manifests**: You can now build out meta-manifests for Impulse!
+See `./tests/impulse_manifest/manifest.yaml` for details.
+
+You can use that manifest with `uv run lpad add ./tests/impulse_manifest/manifest.yaml`
+
 ![Impulse Logo](logo.png)
 
 Impulse is an easy-to-deploy all-in-one solution for extremely high-throuput
@@ -11,7 +20,7 @@ jobs!) This could easily hit thousands of pages per hour.
 ![Flex](flex.png)
 
 This code is very easily extensible to new models/paradigms. Just edit the
-`auxiliary.surya_on_image` function!
+`impulse.tasks.DocumentExtraction` class!
 
 This project would not be possible without the work of other amazing open-
 source projects.
