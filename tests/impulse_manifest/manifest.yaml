@@ -10,12 +10,6 @@ fws:
       - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000001.jp2"
       - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000002.jp2"
       - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000003.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000004.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000005.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000006.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000007.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000008.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000009.jp2"
 - fw_id: 2
   name: OCR
   spec:

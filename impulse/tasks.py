@@ -1,3 +1,4 @@
+import io
 from typing import NoReturn, override
 import re
 import certifi
@@ -8,7 +9,11 @@ from loguru import logger
 from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
+from pymongo import MongoClient
 
+client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
+db = client["praxis"]
+collection = db["pages"]
 
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
@@ -31,33 +36,25 @@ class BinarizationTask(FireTaskBase):
         pass
 
     @staticmethod
-    def _binarize(content):
+    def _binarize(content: bytes) -> bytes:
         import cv2
         import numpy as np
 
-        # Convert to grayscale if RGB
-        try:
-            content_array = np.frombuffer(content, np.uint8)
-        except Exception:
-            logger.critical("Unable to convert bytes to numpy array for binarization.")
-            exit()
+        arr = np.frombuffer(content, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-        if len(content_array.shape) == 3 and content_array.shape[2] == 3:
-            grayscale_content_array = cv2.cvtColor(content_array, cv2.COLOR_RGB2GRAY)
-        else:
-            grayscale_content_array = content_array
+        if img is None:
+            raise ValueError("Failed to decode image.")
 
-        # Otsu’s thresholding (black text on white)
-        otsu_thresh, _ = cv2.threshold(
-            grayscale_content_array, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        adjusted_thresh = otsu_thresh * 1.2
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        _, binary_content_array = cv2.threshold(
-            grayscale_content_array, adjusted_thresh, 255, cv2.THRESH_BINARY
-        )
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        return binary_content_array
+        success, encoded = cv2.imencode(".png", binary)
+        if not success:
+            raise ValueError("Failed to encode binarized image.")
+
+        return encoded.tobytes()
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -134,38 +131,35 @@ class BinarizationTask(FireTaskBase):
             binarized_objects.append((id, identifier))
 
         # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
-        return FWAction(
-            mod_spec=[
-                {"_push": {"binarized_objects": binarized_object}}
-                for binarized_object in binarized_objects
-            ]
-        )
+        return FWAction(update_spec={"binarized_objects": binarized_objects})
 
 
 class DocumentExtractionTask(FireTaskBase):
     _fw_name = "Document Extraction Task"
 
-    @staticmethod
-    def _predict(contents):
-        from surya.foundation import FoundationPredictor
-        from surya.recognition import RecognitionPredictor
-        from surya.detection import DetectionPredictor
-        from loguru import logger
-        from PIL import Image
+    def _predict(self, contents):
+        from marker.converters.pdf import PdfConverter
+        from marker.models import create_model_dict
+        from marker.config.parser import ConfigParser
 
-        logger.info("Making Predictions")
-        foundation_predictor = FoundationPredictor()
-        recognition_predictor = RecognitionPredictor(foundation_predictor)
-        detection_predictor = DetectionPredictor()
-        predictions = recognition_predictor(
-            [Image.open(BytesIO(contents))], det_predictor=detection_predictor
+        config = {"output_format": "json"}
+        config_parser = ConfigParser(config)
+
+        converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
+            artifact_dict=create_model_dict(),
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+            llm_service=config_parser.get_llm_service(),
         )
-        return predictions
+        contents = self.load_jp2(contents)
+        rendered = converter(contents)
+        return rendered
 
     @staticmethod
     def get_filepad_contents(gfs_id):
-        contents, doc = fp.get_file_by_id(gfs_id)
-
+        contents, doc = fp.get_file(gfs_id)
+        logger.info(f"Type of contents: {type(contents)}")
         return contents
 
     @staticmethod
@@ -232,6 +226,24 @@ class DocumentExtractionTask(FireTaskBase):
     def get_file_from_filepad(identifier):
         return fp
 
+    @staticmethod
+    def load_jp2(contents: bytes):
+        import numpy as np
+        import cv2
+        from PIL import Image
+        from io import BytesIO
+
+        arr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR_RGB)
+        img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format="PNG")
+        return img_byte_arr
+
+    def save_to_mongo(model, collection):
+        """Save any Pydantic model to MongoDB."""
+        return collection.insert_one(model.dict())
+
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """
@@ -243,17 +255,17 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
         for path in path_array:
-            if self.is_s3_path(path):
+            if self.is_s3_path(path[0]):
                 # Get content from S3
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
                 logger.info(f"Predictions:\n{predictions}")
-            elif self.is_impulse_identifier(path[-1]):
+            elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
-                content = self.get_s3_content(path)
+                content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                logger.info(f"Predictions:\n{predictions}")
+                logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
                 with open(path, "rb") as f:
