@@ -627,9 +627,7 @@ def surya_on_image(*args):
     text_key = "/".join(
         ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
     )
-    impulse_text_key = "/".join(
-        ["p0491p1074eis-1766005955", accession_number, "TXT", output_filename]
-    )
+    impulse_text_key = "/".join([accession_number, "TXT", output_filename])
     confidence_key = "/".join(
         [accession_number, "CONFIDENCES", output_filename.replace(".txt", ".json")]
     )

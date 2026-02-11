@@ -2,17 +2,15 @@ import os
 import subprocess
 
 print(os.listdir())
-
-for dir in os.listdir("Year2"):
+for dir in os.listdir("lost_flows"):
     accession_number = dir
-
     _ = subprocess.run(
         [
             "uv",
             "run",
-            "main.py",
+            "impulse/main.py",
             "--input",
-            f"./Year2/{dir}",
+            f"lost_flows/{dir}",
             "--accession_number",
             str(accession_number),
         ],
