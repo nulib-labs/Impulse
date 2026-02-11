@@ -597,10 +597,8 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         logger.info("Now loading content from S3")
-        find_path_in = fw_spec["metsxml_path"]
-        input_path: str = fw_spec[find_path_in]
-        find_path_out = fw_spec["metsxml_path"]
-        output_path: str = fw_spec[find_path_out]
+        input_path = fw_spec["input_path"]
+        output_path = fw_spec["output_path"]
         content = self.get_s3_content(input_path)
 
         yaml_content: str = self.convert_mets_to_yml(content)

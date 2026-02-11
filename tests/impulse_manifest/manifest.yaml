@@ -16,6 +16,13 @@ fws:
     find_path_array_in: "binarized_objects"
     _tasks:
     - _fw_name: Document Extraction Task
+- fw_id: 3
+  name: "MetsXML To HathiTrust Manifest Task"
+  spec:
+    input_path: "s3://nu-impulse-production/P0491_35556036056489/mets.xml"
+    output_path: "s3://nu-impulse-production/P0491_35556036056489/mets.yaml"
+    _tasks:
+    - _fw_name: Convert METSXML to HathiTrust Manifest
 links:
   1:
   - 2
