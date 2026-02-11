@@ -1,5 +1,6 @@
 from typing import NoReturn, override
 import re
+import certifi
 import boto3
 from io import BytesIO
 from fireworks.core.firework import FWAction, FireTaskBase
@@ -11,7 +12,10 @@ from uuid import uuid4
 
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
+    port=27017,
+    name="fireworks",
     uri_mode=True,
+    mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
 )
 
 
