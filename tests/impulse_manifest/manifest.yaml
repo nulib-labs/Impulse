@@ -1,29 +1,12 @@
 name: "Warlord"
 fws:
 - fw_id: 1
-  name: "Binarization"
+  name: "Extraction"
   spec:
     find_path_array_in: "path_array"
     _tasks:
-    - _fw_name: Binarization Task
-    path_array: 
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000001.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000002.jp2"
-      - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000003.jp2"
-- fw_id: 2
-  name: OCR
-  spec:
-    find_path_array_in: "binarized_objects"
-    _tasks:
     - _fw_name: Document Extraction Task
-- fw_id: 3
-  name: "MetsXML To HathiTrust Manifest Task"
-  spec:
-    input_path: "s3://nu-impulse-production/P0491_35556036056489/mets.xml"
-    output_path: "s3://nu-impulse-production/P0491_35556036056489/mets.yaml"
-    _tasks:
-    - _fw_name: Convert METSXML to HathiTrust Manifest
-links:
-  1:
-  - 2
+    path_array: 
+      - "s3://nu-impulse-production/p1074_35556032756942/main.pdf"
+links: []
 metadata: {}
