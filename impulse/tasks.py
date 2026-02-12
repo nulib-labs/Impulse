@@ -217,6 +217,7 @@ class DocumentExtractionTask(FireTaskBase):
         else:
             contents: BytesIO = io.BytesIO(contents)
         rendered = converter(contents)
+        logger.info(f"Rendered length: {len(rendered)}")
         return rendered
 
     @staticmethod
