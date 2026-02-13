@@ -1,11 +1,12 @@
-name: "Warlord Extraction"
+
+name: "Warlord"
 fws:
 - fw_id: 1
-  name: "Document Extraction"
+  name: "Binarization"
   spec:
     find_path_array_in: "path_array"
     _tasks:
-    - _fw_name: Document Extraction Task
+    - _fw_name: Binarization Task
     path_array: 
       - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000001.jp2"
       - "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000002.jp2"

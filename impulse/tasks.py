@@ -212,6 +212,7 @@ class DocumentExtractionTask(FireTaskBase):
             renderer=config_parser.get_renderer(),
             llm_service=config_parser.get_llm_service(),
         )
+
         if self.filetype(contents) != "pdf":
             contents = self.load_jp2(contents)
         else:
