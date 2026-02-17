@@ -307,7 +307,10 @@ class DocumentExtractionTask(FireTaskBase):
 
     def save_to_mongo(model, collection):
         """Save any Pydantic model to MongoDB."""
-        return collection.insert_one(model.dict())
+
+        for page in model:
+            collection.insert_one(page.dict())
+        return True
 
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
@@ -315,7 +318,7 @@ class DocumentExtractionTask(FireTaskBase):
         This method runs the OCR task.
         This method looks for `path_array`.
         """
-        find_path_array_in = fw_spec["find_path_array_in"]
+        find_path_array_in: list[str] = fw_spec["find_path_array_in"]
         path_array: list[tuple(str, str)] = fw_spec[find_path_array_in]
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
@@ -325,6 +328,7 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
+                self.save_to_mongo(predictions)
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
