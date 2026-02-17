@@ -1,5 +1,12 @@
-spec:
-  _tasks:
-  - _fw_name: "OCR Task"
-  path: "s3://nu-impulse-production/P0491_35556036091957/JP2000/00000009.jp2"
-  output_path: "/home/ayn/Work/Impulse/my_image.jpg"
+name: Meow
+fws:
+  - fw_id: 1
+    name: "grace's test"
+    spec:
+      _tasks:
+      - _fw_name: Extract Metadata
+      docs_path: "/Users/gracegormley/Desktop/Y2/Q2/Knight Lab/docs_with_digits.json"
+      ner_dir: "/Users/gracegormley/Desktop/Y2/Q2/Knight Lab/Metadata/place_metadata/ner_run"
+      output_path: "/Users/gracegormley/Desktop/test_metadata.json"
+links: []
+metadata: {}

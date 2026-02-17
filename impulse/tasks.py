@@ -10,7 +10,8 @@ from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
 from pymongo import MongoClient
-
+import json
+from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
 
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
@@ -672,3 +673,87 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         s3_path = self.save_to_s3(output_path, yaml_content)
 
         return FWAction(update_spec={"hathitrust_yaml_path": s3_path})
+
+
+class ExtractMetadata(FireTaskBase):
+    _fw_name = "Extract Metadata"
+
+    def run_task(self, fw_spec):
+
+        docs_path = Path(fw_spec['docs_path'])
+        ner_dir = Path(fw_spec['ner_dir'])
+        output_path = Path(fw_spec["output_path"])
+
+    #load docs dict
+        with open(docs_path, "r", encoding="utf-8") as f:
+            docs_dict = json.load(f)
+
+        results = {}
+
+        # ------------------
+        # Loop through NER
+        # ------------------
+        for ner_file in ner_dir.glob("*.json"):
+
+            with open(ner_file, "r") as f:
+                ner_data = json.load(f)
+
+            doc_id = ner_file.stem  
+
+            # ---- Extract entities ----
+            gpes = [e["text"] for e in ner_data["entities"] if e["label"] == "GPE"]
+            people = [e["text"] for e in ner_data["entities"] if e["label"] == "PERSON"]
+
+            gpes = list(dict.fromkeys(gpes))
+            people = list(dict.fromkeys(people))
+
+            # ---- AI step ----
+            summary = self.ask_ai_func(gpes, people)
+
+            # ---- Combine with docs ----
+            results[doc_id] = {
+                "original_doc": docs_dict[doc_id],
+                "metadata": summary
+            }
+
+        # ------------------
+        # Save final metadata
+        # ------------------
+        with open(output_path, "w") as f:
+            json.dump(results, f)
+
+        return FWAction(update_spec={"metadata_path": str(output_path)})
+
+
+    def ask_ai_func(self, gpes, people):
+        prompt = f"""
+            You are given the following information extracted from a document:
+
+            Places mentioned: {gpes}
+            People mentioned: {people}
+
+            Task: Identify:
+            1) The main location of the document (the most important place, most frequently mentioned, or the location where the main project occurs)
+            2) 5-7 key people mentioned
+
+            Please ONLY return one location as the main place, and a list of up to 6 key people. If the most important place is not very specific, please augment it to make it more specific (ie "washington" to "washington dc" or "washington state"). If the listed places and names are bogus, please try to extract them on your own, or put None. Do NOT include any other information or explanations or questions. Thank you. 
+            Return **ONLY JSON** in this format:
+            {{
+            "main_place": "...",
+            "key_people": ["...", "..."]
+            }}
+        """
+
+        response = self.call_llm(prompt)
+
+        try:
+            return json.loads(response)
+        except:
+            return {"main_place": None, "key_people": []}
+
+    def call_llm(self, prompt):
+    # LOCAL MOCK — replace later with real model
+        return json.dumps({
+            "main_place": "Chicago, Illinois",
+            "key_people": ["John Doe", "Jane Smith"]
+        })
