@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 
-client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
+client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
 db = client["praxis"]
 collection = db["pages"]
 
