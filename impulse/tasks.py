@@ -316,9 +316,11 @@ class DocumentExtractionTask(ImpulseTask):
     def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
 
-        for page in tqdm(model, desc="Uploading data to MongoDB"):
-            logger.info(f"Value of page: {page}")
-            collection.insert_one(page[1].dict())
+        for i in tqdm(model, desc="Uploading data to MongoDB"):
+            logger.info(f"Value of page: {i}")
+            pages = i[1]
+            for page in pages:
+                collection.insert_one(page.dict())
         return True
 
     @override
