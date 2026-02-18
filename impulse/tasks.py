@@ -319,7 +319,7 @@ class DocumentExtractionTask(ImpulseTask):
             logger.info(f"Value of page: {i}")
             pages = i[1]
             for page in pages:
-                collection.insert_one(page.model_dump())
+                collection.insert_one(page)
         return True
 
     @override
