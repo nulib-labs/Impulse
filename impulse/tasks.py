@@ -317,7 +317,7 @@ class DocumentExtractionTask(ImpulseTask):
 
         for page in model:
             logger.info(f"Value of page: {page}")
-            collection.insert_one(page.dict())
+            collection.insert_one(page[1].dict())
         return True
 
     @override
