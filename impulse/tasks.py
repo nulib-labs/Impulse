@@ -206,7 +206,6 @@ class BinarizationTask(ImpulseTask):
 class DocumentExtractionTask(ImpulseTask):
     _fw_name = "Document Extraction Task"
 
-    from marker.models import 
     def _predict(self, contents):
         from marker.converters.pdf import PdfConverter
         from marker.models import create_model_dict
