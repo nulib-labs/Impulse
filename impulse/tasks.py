@@ -4,6 +4,7 @@ import re
 import certifi
 import boto3
 from io import BytesIO
+from cv2 import MarkerTypes
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 from fireworks.utilities.filepad import FilePad
@@ -205,6 +206,7 @@ class BinarizationTask(ImpulseTask):
 class DocumentExtractionTask(ImpulseTask):
     _fw_name = "Document Extraction Task"
 
+    from marker.models import 
     def _predict(self, contents):
         from marker.converters.pdf import PdfConverter
         from marker.models import create_model_dict
@@ -314,12 +316,11 @@ class DocumentExtractionTask(ImpulseTask):
 
     def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
-
         for i in tqdm(model, desc="Uploading data to MongoDB"):
-            logger.info(f"Value of page: {i}")
             pages = i[1]
             for page in pages:
-                collection.insert_one(page)
+                collection.insert_one(page.model_dump())  # Pydantic v2
+                # collection.insert_one(page.dict())      # Pydantic v1
         return True
 
     @override
