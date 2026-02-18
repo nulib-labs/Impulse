@@ -14,7 +14,9 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 
-client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"))
+client = MongoClient(
+    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"), tlsCAFile=certifi.where()
+)
 db = client["praxis"]
 collection = db["pages"]
 
