@@ -4,7 +4,6 @@ import re
 import certifi
 import boto3
 from io import BytesIO
-from cv2 import MarkerTypes
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 from fireworks.utilities.filepad import FilePad
@@ -33,6 +32,8 @@ class ImpulseTask(FireTaskBase):
     Extends the FireTaskBase with helper functions common to all
     tasks in Impulse
     """
+
+    _fw_name = "meow"
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -203,7 +204,7 @@ class BinarizationTask(ImpulseTask):
         return FWAction(update_spec={"binarized_objects": binarized_objects})
 
 
-class DocumentExtractionTask(ImpulseTask):
+class DocumentExtractionTask(FireTaskBase):
     _fw_name = "Document Extraction Task"
 
     def _predict(self, contents):
