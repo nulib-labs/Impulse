@@ -1,5 +1,5 @@
 import io
-from typing import NoReturn, override
+from typing import override
 import re
 import certifi
 import boto3
@@ -12,7 +12,6 @@ from uuid import uuid4
 from pymongo import MongoClient
 import json
 from pathlib import Path
-from impulse.auxiliary import convert_mets_to_yml
 from tqdm import tqdm
 
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
@@ -320,7 +319,7 @@ class DocumentExtractionTask(ImpulseTask):
             logger.info(f"Value of page: {i}")
             pages = i[1]
             for page in pages:
-                collection.insert_one(page.dict())
+                collection.insert_one(page.model_dump())
         return True
 
     @override
