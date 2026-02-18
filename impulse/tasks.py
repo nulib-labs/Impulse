@@ -319,9 +319,19 @@ class DocumentExtractionTask(ImpulseTask):
         for i in tqdm(model, desc="Uploading data to MongoDB"):
             pages = i[1]
             for page in pages:
-                collection.insert_one(page.model_dump())  # Pydantic v2
+                collection.insert_one(page.model_dump(mode="json"))  # Pydantic v2
                 # collection.insert_one(page.dict())      # Pydantic v1
         return True
+
+    @staticmethod
+    def save_to_pkl(model):
+        """
+        Save to pkl
+        """
+        import pickle
+
+        with open("my_model.pkl", "wb") as f:
+            pickle.dump(model, f)
 
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
@@ -339,6 +349,7 @@ class DocumentExtractionTask(ImpulseTask):
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
+                self.save_to_pkl(predictions)
                 self.save_to_mongo(predictions, collection)
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
