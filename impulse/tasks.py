@@ -13,6 +13,7 @@ from pymongo import MongoClient
 import json
 from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
+from tqdm import tqdm
 
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
@@ -315,7 +316,7 @@ class DocumentExtractionTask(ImpulseTask):
     def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
 
-        for page in model:
+        for page in tqdm(model, desc="Uploading data to MongoDB"):
             logger.info(f"Value of page: {page}")
             collection.insert_one(page[1].dict())
         return True
