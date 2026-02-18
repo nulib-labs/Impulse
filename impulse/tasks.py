@@ -309,6 +309,7 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
 
         for page in model:
+            logger.info(f"Value of page: {page}")
             collection.insert_one(page.dict())
         return True
 
