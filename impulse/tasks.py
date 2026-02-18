@@ -204,7 +204,7 @@ class BinarizationTask(ImpulseTask):
         return FWAction(update_spec={"binarized_objects": binarized_objects})
 
 
-class DocumentExtractionTask(FireTaskBase):
+class DocumentExtractionTask(ImpulseTask):
     _fw_name = "Document Extraction Task"
 
     def _predict(self, contents):
