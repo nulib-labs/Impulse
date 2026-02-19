@@ -210,7 +210,7 @@ class BinarizationTask(ImpulseTask):
         return FWAction(update_spec={"binarized_objects": binarized_objects})
 
 
-class DocumentExtractionTask(ImpulseTask):
+class DocumentExtractionTask(FireTaskBase):
     _fw_name = "Document Extraction Task"
 
     def _predict(self, contents):
@@ -321,9 +321,10 @@ class DocumentExtractionTask(ImpulseTask):
         return img_byte_arr
 
     def save_to_mongo(self, model: JSONOutput, collection, id: str):
-        """Save any Pydantic model to MongoDB.""" 
-        for page_number, page in tqdm(enumerate(model.children), desc="Uploading data to MongoDB"): # `.children` is a list of JSONBlockOutputs        page_dict["doc_id"] = id
-            
+        """Save any Pydantic model to MongoDB."""
+        for page_number, page in tqdm(
+            enumerate(model.children), desc="Uploading data to MongoDB"
+        ):  # `.children` is a list of JSONBlockOutputs        page_dict["doc_id"] = id
             page_dict = page.model_dump(mode="json")
             page_dict["page_number"] = page_number
             page_dict["accession_number"] = id
