@@ -331,6 +331,64 @@ class DocumentExtractionTask(FireTaskBase):
             collection.insert_one(page_dict)
         return True
 
+    def filetype(self, contents: bytes) -> str | None:
+        """
+        Determine file type from raw bytes using magic numbers.
+
+        Args:
+            contents: File contents as bytes
+
+        Returns:
+            File extension string (e.g. 'png', 'pdf') or None if unknown
+        """
+        if not contents or len(contents) < 4:
+            return None
+
+        # PNG
+        if contents.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "png"
+
+        # JPEG
+        if contents.startswith(b"\xff\xd8\xff"):
+            return "jpg"
+
+        # GIF
+        if contents.startswith((b"GIF87a", b"GIF89a")):
+            return "gif"
+
+        # PDF
+        if contents.startswith(b"%PDF"):
+            return "pdf"
+
+        # ZIP (also used by docx, xlsx, pptx, etc.)
+        if contents.startswith(b"PK\x03\x04"):
+            return "zip"
+
+        # GZIP
+        if contents.startswith(b"\x1f\x8b"):
+            return "gz"
+
+        # MP3 (ID3 tag)
+        if contents.startswith(b"ID3"):
+            return "mp3"
+
+        # MP4
+        if len(contents) > 8 and contents[4:8] == b"ftyp":
+            return "mp4"
+
+        # JP2 (JPEG 2000)
+        if contents.startswith(b"\x00\x00\x00\x0cjP  \r\n\x87\n"):
+            return "jp2"
+
+        # Plain text (heuristic)
+        try:
+            contents.decode("utf-8")
+            return "txt"
+        except UnicodeDecodeError:
+            pass
+
+        return None
+
     @staticmethod
     def save_to_pkl(model):
         """
