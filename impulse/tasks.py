@@ -752,8 +752,20 @@ class ExtractMetadata(FireTaskBase):
             return {"main_place": None, "key_people": []}
 
     def call_llm(self, prompt):
-    # LOCAL MOCK — replace later with real model
-        return json.dumps({
-            "main_place": "Chicago, Illinois",
-            "key_people": ["John Doe", "Jane Smith"]
-        })
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key="EMPTY",
+            base_url="http://localhost:8000/v1"  # adjust port if needed
+        )
+
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it",  # must match what you launched vLLM with
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,  # low temp for deterministic structured output
+            max_tokens=256,   # JSON response is short, no need for more
+        )
+
+        return response.choices[0].message.content.strip()
