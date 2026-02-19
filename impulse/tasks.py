@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 from codecarbon import track_emissions
+from marker.renderers.json import JSONOutput
 
 client = MongoClient(
     os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"), tlsCAFile=certifi.where()
@@ -318,19 +319,15 @@ class DocumentExtractionTask(ImpulseTask):
         img.save(img_byte_arr, format="PNG")
         return img_byte_arr
 
-    def save_to_mongo(self, model, collection, id):
+    def save_to_mongo(self, model: JSONOutput, collection, id):
         """Save any Pydantic model to MongoDB."""
-        documents = []
-        for item in tqdm(model, desc="Uploading data to MongoDB"):
-            pages = item[1]
 
-            for page in pages:
-                doc = page.model_dump(mode="json")
-                doc["accession_number"] = id
-                documents.append(doc)
-
-        if documents:
-            collection.insert_many(documents)
+        for i in tqdm(model.children, desc="Uploading data to MongoDB"):
+            pages = i[1]
+            for i, page in enumerate(pages):
+                page = page.model_dump(mode="json")
+                page["accession_number"] = id
+                collection.insert_one(page)
         return True
 
     @staticmethod
