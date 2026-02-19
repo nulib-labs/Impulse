@@ -3,6 +3,7 @@ fws:
   - fw_id: 1
     name: "Extraction"
     spec:
+      accession_number: p1074_35556032756942
       find_path_array_in: "path_array"
       _tasks:
         - _fw_name: Document Extraction Task
