@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from typing import override
 import re
 import certifi
@@ -14,16 +15,16 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 from codecarbon import track_emissions
-from marker.renderers.json import JSONOutput
+from marker.renderers.json import JSONOutput, JSONBlockOutput
 
 client = MongoClient(
-    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"), tlsCAFile=certifi.where()
+    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"), tlsCAFile=certifi.where()
 )
 db = client["praxis"]
 collection = db["pages"]
 
 fp = FilePad(
-    host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
+    host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE")),
     port=27017,
     name="fireworks",
     uri_mode=True,
@@ -319,15 +320,14 @@ class DocumentExtractionTask(ImpulseTask):
         img.save(img_byte_arr, format="PNG")
         return img_byte_arr
 
-    def save_to_mongo(self, model: JSONOutput, collection, id):
-        """Save any Pydantic model to MongoDB."""
-
-        for i in tqdm(model.children, desc="Uploading data to MongoDB"):
-            pages = i[1]
-            for i, page in enumerate(pages):
-                page = page.model_dump(mode="json")
-                page["accession_number"] = id
-                collection.insert_one(page)
+    def save_to_mongo(self, model: JSONOutput, collection, id: str):
+        """Save any Pydantic model to MongoDB.""" 
+        for page_number, page in tqdm(enumerate(model.children), desc="Uploading data to MongoDB"): # `.children` is a list of JSONBlockOutputs        page_dict["doc_id"] = id
+            
+            page_dict = page.model_dump(mode="json")
+            page_dict["page_number"] = page_number
+            page_dict["accession_number"] = id
+            collection.insert_one(page_dict)
         return True
 
     @staticmethod
@@ -373,9 +373,13 @@ class DocumentExtractionTask(ImpulseTask):
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
+                path = Path(path).expanduser()
                 with open(path, "rb") as f:
                     content = f.read()
                 predictions = self._predict(content)
+                self.save_to_mongo(
+                    model=predictions, collection=collection, id=accession_number
+                )
                 logger.info(f"Predictions:\n{predictions}")
 
         return FWAction()
