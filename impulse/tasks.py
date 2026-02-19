@@ -13,6 +13,7 @@ from pymongo import MongoClient
 import json
 from pathlib import Path
 from tqdm import tqdm
+from codecarbon import track_emissions
 
 client = MongoClient(
     os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"), tlsCAFile=certifi.where()
@@ -177,6 +178,7 @@ class BinarizationTask(ImpulseTask):
 
         return encoded.tobytes()
 
+    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
@@ -316,11 +318,12 @@ class DocumentExtractionTask(ImpulseTask):
         img.save(img_byte_arr, format="PNG")
         return img_byte_arr
 
-    def save_to_mongo(self, model, collection):
+    def save_to_mongo(self, model, collection, id):
         """Save any Pydantic model to MongoDB."""
         for i in tqdm(model, desc="Uploading data to MongoDB"):
             pages = i[1]
             for page in pages:
+                page["accession_number"] = id
                 collection.insert_one(page.model_dump(mode="json"))  # Pydantic v2
                 # collection.insert_one(page.dict())      # Pydantic v1
         return True
@@ -335,6 +338,7 @@ class DocumentExtractionTask(ImpulseTask):
         with open("my_model.pkl", "wb") as f:
             pickle.dump(model, f)
 
+    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """
@@ -342,6 +346,7 @@ class DocumentExtractionTask(ImpulseTask):
         This method looks for `path_array`.
         """
         find_path_array_in: list[str] = fw_spec["find_path_array_in"]
+        accession_number: str = fw_spec["accession_number"]
         path_array: list[tuple(str, str)] = fw_spec[find_path_array_in]
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
@@ -352,13 +357,17 @@ class DocumentExtractionTask(ImpulseTask):
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
                 self.save_to_pkl(predictions)
-                self.save_to_mongo(predictions, collection)
+                self.save_to_mongo(
+                    model=predictions, collection=collection, id=accession_number
+                )
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=collection)
+                self.save_to_mongo(
+                    model=predictions, collection=collection, id=accession_number
+                )
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
@@ -378,6 +387,7 @@ class TextExtractionTask(ImpulseTask):
     def _extract(content):
         pass
 
+    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         return FWAction()
@@ -568,6 +578,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         yaml_content: str = "\n".join(yaml_lines)
         return yaml_content
 
+    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         logger.info("Now loading content from S3")
@@ -619,6 +630,8 @@ class ExtractMetadata(ImpulseTask):
             }
         )
 
+    @track_emissions
+    @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         docs_path = Path(fw_spec["docs_path"])
         ner_dir = Path(fw_spec["ner_dir"])
