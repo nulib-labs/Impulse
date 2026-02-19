@@ -9,5 +9,14 @@ fws:
         - _fw_name: Document Extraction Task
       path_array:
         - "s3://nu-impulse-production/p1074_35556032756942/main.pdf"
+  - fw_id: 2
+    name: "Extraction"
+    spec:
+      accession_number: P0491_35556038304879/
+      find_path_array_in: "path_array"
+      _tasks:
+        - _fw_name: Document Extraction Task
+      path_array:
+        - "s3://nu-impulse-production/P0491_35556038304879//main.pdf"
 links: []
 metadata: {}
