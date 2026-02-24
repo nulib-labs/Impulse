@@ -1102,7 +1102,103 @@ class Summaries(FireTaskBase):
 
 
 #-------------------------------------------------------------------------
-#QUOTES
+#THEMES
 #-------------------------------------------------------------------------
 
+def ask_ai_func_themes(self, raw_text="", host=None):
+    max_chars = 10000
+    was_truncated = False
+    
+    if len(raw_text) > max_chars:
+        # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
+        chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
+        was_truncated = True
+    else:
+        chunk = raw_text
 
+    prompt = f"""
+Document text:
+{" ".join(chunk.split())}
+
+Task: Please assign this document to 1-3 themes from the following controlled vocabulary, based on the content of the document. The themes are broad topics that capture the main subjects of the document. Please ONLY return themes that are strongly supported by the text, and avoid making assumptions or inferences that aren't directly supported by the content. If you can't confidently assign any themes, return an empty list.
+
+Your response MUST be in this exact format:
+{"themes": ["theme1", "theme2", "theme3"]}
+Don't add any other text or ask follow up questions, just return the JSON with the themes. Here is the controlled vocabulary of themes to choose from:
+- Transportation Infrastructure
+- Energy Systems
+- Wildlife and Natural Areas
+- Water Systems
+- Urban Development
+- Industrial Production and Materials
+- Climate and Weather Modification
+- Governance and Institutional Control
+- Place Based Development Conflicts
+- Indigenous Narratives and Sovereignty
+"""
+
+    response = self.call_llm(prompt, host=host)
+
+    # Strip accidental markdown fences before parsing
+    response = re.sub(r"```(?:json)?|```", "", response).strip()
+
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        return {"themes": []}
+
+def call_llm(self, prompt: str, host: str) -> str:
+    client = OpenAI(api_key="EMPTY", base_url=host)
+
+    response = client.chat.completions.create(
+        model="google/gemma-3-27b-it",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        max_tokens=256,
+    )
+
+    return response.choices[0].message.content.strip()
+
+#helper for following taskkkk
+
+
+class Themes(FireTaskBase):
+    _fw_name = "Themes"
+    path: str
+
+    def run_task(self, fw_spec):
+
+        debug = fw_spec.get("debug", False)
+
+        import socket
+        llm_host = f"http://{socket.gethostname()}:8000/v1"
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # 1. Load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            themes = self.ask_ai_func_themes(raw_text=text, host=llm_host)
+
+            results[doc_id] = {
+                "doc_id":     doc_id,
+                "themes": themes.get("themes", []), 
+            }
+
+        # 4. Save
+        if debug:
+            local_path = Path.cwd() / "overall_themes.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved metadata to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
