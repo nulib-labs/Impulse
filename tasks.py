@@ -856,6 +856,8 @@ class FetchDocs(FireTaskBase):
 
             return FWAction(update_spec={"docs_path": docs_path})
 
+
+
 # ---------------------------------------------------------------------------
 # Task 2 -- Run NER on fetched docs, call LLM, produce final metadata JSON
 # ---------------------------------------------------------------------------
@@ -952,9 +954,7 @@ class ExtractMetadata(FireTaskBase):
             return FWAction(update_spec={"metadata_path": output_path})
 
 
-    # ------------------------------------------------------------------
     # LLM helpers
-    # ------------------------------------------------------------------
 
     def ask_ai_func(self, gpes, people, raw_text="", host=None):
 
@@ -1004,9 +1004,14 @@ explanations. Return ONLY this exact format:
 
         return response.choices[0].message.content.strip()
 
+
+
+
+#-------------------------------------------------------------------------
+#SUMMARIES
 #-------------------------------------------------------------------------
 
-   def ask_ai_func_summaries(self, raw_text="", host=None):
+    def ask_ai_func_summaries(self, raw_text="", host=None):
         max_chars = 24000  # 6k tokens (ok for gemma 27b, maybe don't use a smaller model)
         was_truncated = False
         
@@ -1074,7 +1079,7 @@ class Summaries(FireTaskBase):
         results = {}
         for doc_id, text in docs_dict.items():
             summary = self.ask_ai_func_summaries(raw_text=text, host=llm_host)
-            
+
             results[doc_id] = {
                 "doc_id":     doc_id,
                 "summary": summary.get("summary"), #THIS MEANS RESPONSE MUST HAVE "summary"
@@ -1090,3 +1095,14 @@ class Summaries(FireTaskBase):
         else:
             s3_write_json(output_path, results)
             return FWAction(update_spec={"metadata_path": output_path})
+
+
+
+
+
+
+#-------------------------------------------------------------------------
+#QUOTES
+#-------------------------------------------------------------------------
+
+
