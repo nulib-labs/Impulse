@@ -29,6 +29,7 @@ dependencies = [
   "pypdf2>=3.0.1",
   "python-doctr>=1.0.0",
   "sentence-transformers>=5.1.1",
+  "spacy>=3.8.11",
   "surya-ocr>=0.17.1",
   "transformers>=4.57.0",
 ]

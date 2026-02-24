@@ -657,7 +657,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         return FWAction(update_spec={"hathitrust_yaml_path": s3_path})
 
 
-class ExtractMetadata(ImpulseTask):
+class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
     def _ask_ai_func(self, gpes, people):
