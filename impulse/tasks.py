@@ -328,7 +328,7 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
-                self.save_to_mongo(predictions)
+                self.save_to_mongo(predictions, collection)
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
@@ -679,12 +679,11 @@ class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
     def run_task(self, fw_spec):
-
-        docs_path = Path(fw_spec['docs_path'])
-        ner_dir = Path(fw_spec['ner_dir'])
+        docs_path = Path(fw_spec["docs_path"])
+        ner_dir = Path(fw_spec["ner_dir"])
         output_path = Path(fw_spec["output_path"])
 
-    #load docs dict
+        # load docs dict
         with open(docs_path, "r", encoding="utf-8") as f:
             docs_dict = json.load(f)
 
@@ -694,11 +693,10 @@ class ExtractMetadata(FireTaskBase):
         # Loop through NER
         # ------------------
         for ner_file in ner_dir.glob("*.json"):
-
             with open(ner_file, "r") as f:
                 ner_data = json.load(f)
 
-            doc_id = ner_file.stem  
+            doc_id = ner_file.stem
 
             # ---- Extract entities ----
             gpes = [e["text"] for e in ner_data["entities"] if e["label"] == "GPE"]
@@ -711,10 +709,7 @@ class ExtractMetadata(FireTaskBase):
             summary = self.ask_ai_func(gpes, people)
 
             # ---- Combine with docs ----
-            results[doc_id] = {
-                "original_doc": docs_dict[doc_id],
-                "metadata": summary
-            }
+            results[doc_id] = {"original_doc": docs_dict[doc_id], "metadata": summary}
 
         # ------------------
         # Save final metadata
@@ -723,7 +718,6 @@ class ExtractMetadata(FireTaskBase):
             json.dump(results, f)
 
         return FWAction(update_spec={"metadata_path": str(output_path)})
-
 
     def ask_ai_func(self, gpes, people):
         prompt = f"""
@@ -752,6 +746,7 @@ class ExtractMetadata(FireTaskBase):
             return {"main_place": None, "key_people": []}
 
     def call_llm(self, prompt):
+<<<<<<< HEAD
         from openai import OpenAI
 
         client = OpenAI(
@@ -769,3 +764,13 @@ class ExtractMetadata(FireTaskBase):
         )
 
         return response.choices[0].message.content.strip()
+=======
+        # LOCAL MOCK — replace later with real model
+        return json.dumps(
+            {
+                "main_place": "Chicago, Illinois",
+                "key_people": ["John Doe", "Jane Smith"],
+            }
+        )
+
+>>>>>>> 37c9039 (Fix tasks)
