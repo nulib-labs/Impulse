@@ -929,15 +929,15 @@ class ExtractMetadata(FireTaskBase):
             ))
 
             # Call LLM
-            summary = self.ask_ai_func(gpes, people, raw_text=text, host=llm_host)
+            places_n_people = self.ask_ai_func(gpes, people, raw_text=text, host=llm_host)
 
 
 
             # Collect result
             results[doc_id] = {
                 "doc_id":     doc_id,
-                "main_place": summary.get("main_place"),
-                "key_people": summary.get("key_people", []),
+                "main_place": places_n_people.get("main_place"),
+                "key_people": places_n_people.get("key_people", [])
             }
 
         # 4. Save
@@ -1003,3 +1003,90 @@ explanations. Return ONLY this exact format:
         )
 
         return response.choices[0].message.content.strip()
+
+#-------------------------------------------------------------------------
+
+   def ask_ai_func_summaries(self, raw_text="", host=None):
+        max_chars = 24000  # 6k tokens (ok for gemma 27b, maybe don't use a smaller model)
+        was_truncated = False
+        
+        if len(raw_text) > max_chars:
+            # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
+            chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
+            was_truncated = True
+        else:
+            chunk = raw_text
+
+        prompt = f"""
+Document text:
+{" ".join(chunk.split())}
+
+Task: summarize...
+    summary summary summary summary  #FIX FIX FIX AAHHFOINFODN
+"""
+
+        response = self.call_llm(prompt, host=host)
+
+        # Strip accidental markdown fences before parsing
+        response = re.sub(r"```(?:json)?|```", "", response).strip()
+
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"summary": None}
+
+    def call_llm(self, prompt: str, host: str) -> str:
+        client = OpenAI(api_key="EMPTY", base_url=host)
+
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=256,
+        )
+
+        return response.choices[0].message.content.strip()
+
+#helper for following taskkkk
+
+
+class Summaries(FireTaskBase):
+    _fw_name = "Summaries"
+    path: str
+
+    def run_task(self, fw_spec):
+
+        debug = fw_spec.get("debug", False)
+
+        import socket
+        llm_host = f"http://{socket.gethostname()}:8000/v1"
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # 1. Load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            summary = self.ask_ai_func_summaries(raw_text=text, host=llm_host)
+            
+            results[doc_id] = {
+                "doc_id":     doc_id,
+                "summary": summary.get("summary"), #THIS MEANS RESPONSE MUST HAVE "summary"
+            }
+
+        # 4. Save
+        if debug:
+            local_path = Path.cwd() / "overall_summaries.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved metadata to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
