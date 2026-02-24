@@ -1,6 +1,5 @@
 import io
-from pathlib import Path
-from typing import override
+from typing import NoReturn, override
 import re
 import certifi
 import boto3
@@ -10,21 +9,18 @@ from loguru import logger
 from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
+from numpy.strings import strip
 from pymongo import MongoClient
 import json
 from pathlib import Path
-from tqdm import tqdm
-from codecarbon import track_emissions
-from marker.renderers.json import JSONOutput, JSONBlockOutput
+from impulse.auxiliary import convert_mets_to_yml
 
-client = MongoClient(
-    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"), tlsCAFile=certifi.where()
-)
+client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
 collection = db["pages"]
 
 fp = FilePad(
-    host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE")),
+    host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
     port=27017,
     name="fireworks",
     uri_mode=True,
@@ -32,13 +28,37 @@ fp = FilePad(
 )
 
 
-class ImpulseTask(FireTaskBase):
-    """
-    Extends the FireTaskBase with helper functions common to all
-    tasks in Impulse
-    """
+class BinarizationTask(FireTaskBase):
+    _fw_name = "Binarization Task"
+    output_path: str | None
 
-    _fw_name = "meow"
+    @staticmethod
+    def _save_content(output_path, content):
+        import cv2
+
+        _ = cv2.imwrite(output_path, content)
+        pass
+
+    @staticmethod
+    def _binarize(content: bytes) -> bytes:
+        import cv2
+        import numpy as np
+
+        arr = np.frombuffer(content, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise ValueError("Failed to decode image.")
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        success, encoded = cv2.imencode(".png", binary)
+        if not success:
+            raise ValueError("Failed to encode binarized image.")
+
+        return encoded.tobytes()
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -88,6 +108,38 @@ class ImpulseTask(FireTaskBase):
         buffer.seek(0)
 
         return buffer.read()
+
+    @override
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        """
+        This method runs the binarization task.
+        This task takes one spec entry: `path` of type `str`
+        """
+        path_array_key = fw_spec["find_path_array_in"]
+        path_array: str = fw_spec[path_array_key]
+        binarized_objects: list[tuple[str, str]]
+        binarized_objects = []
+        for path in path_array:
+            logger.info(f"`path` is {path}")
+            if self.is_s3_path(path):
+                logger.info("Now loading content from S3")
+                content = self.get_s3_content(path)
+                binarized = self._binarize(content)
+            else:
+                with open(path, "rb") as f:
+                    content = f.read()
+                binarized = self._binarize(content)
+            id, identifier = fp.add_contents(
+                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
+            )
+            binarized_objects.append((id, identifier))
+
+        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
+        return FWAction(update_spec={"binarized_objects": binarized_objects})
+
+
+class DocumentExtractionTask(FireTaskBase):
+    _fw_name = "Document Extraction Task"
 
     def filetype(self, contents: bytes) -> str | None:
         """
@@ -146,72 +198,6 @@ class ImpulseTask(FireTaskBase):
             pass
 
         return None
-
-
-class BinarizationTask(ImpulseTask):
-    _fw_name = "Binarization Task"
-    output_path: str | None
-
-    @staticmethod
-    def _save_content(output_path, content):
-        import cv2
-
-        _ = cv2.imwrite(output_path, content)
-        pass
-
-    @staticmethod
-    def _binarize(content: bytes) -> bytes:
-        import cv2
-        import numpy as np
-
-        arr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Failed to decode image.")
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        success, encoded = cv2.imencode(".png", binary)
-        if not success:
-            raise ValueError("Failed to encode binarized image.")
-
-        return encoded.tobytes()
-
-    @track_emissions()
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        """
-        This method runs the binarization task.
-        This task takes one spec entry: `path` of type `str`
-        """
-        path_array_key = fw_spec["find_path_array_in"]
-        path_array: str = fw_spec[path_array_key]
-        binarized_objects: list[tuple[str, str]]
-        binarized_objects = []
-        for path in path_array:
-            logger.info(f"`path` is {path}")
-            if self.is_s3_path(path):
-                logger.info("Now loading content from S3")
-                content = self.get_s3_content(path)
-                binarized = self._binarize(content)
-            else:
-                with open(path, "rb") as f:
-                    content = f.read()
-                binarized = self._binarize(content)
-            id, identifier = fp.add_contents(
-                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
-            )
-            binarized_objects.append((id, identifier))
-
-        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
-        return FWAction(update_spec={"binarized_objects": binarized_objects})
-
-
-class DocumentExtractionTask(FireTaskBase):
-    _fw_name = "Document Extraction Task"
 
     def _predict(self, contents):
         from marker.converters.pdf import PdfConverter
@@ -320,86 +306,13 @@ class DocumentExtractionTask(FireTaskBase):
         img.save(img_byte_arr, format="PNG")
         return img_byte_arr
 
-    def save_to_mongo(self, model: JSONOutput, collection, id: str):
+    def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
-        for page_number, page in tqdm(
-            enumerate(model.children), desc="Uploading data to MongoDB"
-        ):  # `.children` is a list of JSONBlockOutputs        page_dict["doc_id"] = id
-            page_dict = page.model_dump(mode="json")
-            page_dict["page_number"] = page_number
-            page_dict["accession_number"] = id
-            collection.insert_one(page_dict)
+
+        for page in model:
+            collection.insert_one(page.dict())
         return True
 
-    def filetype(self, contents: bytes) -> str | None:
-        """
-        Determine file type from raw bytes using magic numbers.
-
-        Args:
-            contents: File contents as bytes
-
-        Returns:
-            File extension string (e.g. 'png', 'pdf') or None if unknown
-        """
-        if not contents or len(contents) < 4:
-            return None
-
-        # PNG
-        if contents.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "png"
-
-        # JPEG
-        if contents.startswith(b"\xff\xd8\xff"):
-            return "jpg"
-
-        # GIF
-        if contents.startswith((b"GIF87a", b"GIF89a")):
-            return "gif"
-
-        # PDF
-        if contents.startswith(b"%PDF"):
-            return "pdf"
-
-        # ZIP (also used by docx, xlsx, pptx, etc.)
-        if contents.startswith(b"PK\x03\x04"):
-            return "zip"
-
-        # GZIP
-        if contents.startswith(b"\x1f\x8b"):
-            return "gz"
-
-        # MP3 (ID3 tag)
-        if contents.startswith(b"ID3"):
-            return "mp3"
-
-        # MP4
-        if len(contents) > 8 and contents[4:8] == b"ftyp":
-            return "mp4"
-
-        # JP2 (JPEG 2000)
-        if contents.startswith(b"\x00\x00\x00\x0cjP  \r\n\x87\n"):
-            return "jp2"
-
-        # Plain text (heuristic)
-        try:
-            contents.decode("utf-8")
-            return "txt"
-        except UnicodeDecodeError:
-            pass
-
-        return None
-
-    @staticmethod
-    def save_to_pkl(model):
-        """
-        Save to pkl
-        """
-        import pickle
-
-        with open("my_model.pkl", "wb") as f:
-            pickle.dump(model, f)
-
-    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """
@@ -407,7 +320,6 @@ class DocumentExtractionTask(FireTaskBase):
         This method looks for `path_array`.
         """
         find_path_array_in: list[str] = fw_spec["find_path_array_in"]
-        accession_number: str = fw_spec["accession_number"]
         path_array: list[tuple(str, str)] = fw_spec[find_path_array_in]
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
@@ -417,34 +329,25 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
-                self.save_to_pkl(predictions)
-                self.save_to_mongo(
-                    model=predictions, collection=collection, id=accession_number
-                )
+                self.save_to_mongo(predictions)
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                self.save_to_mongo(
-                    model=predictions, collection=collection, id=accession_number
-                )
+                self.save_to_mongo(model=predictions, collection=collection)
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
-                path = Path(path).expanduser()
                 with open(path, "rb") as f:
                     content = f.read()
                 predictions = self._predict(content)
-                self.save_to_mongo(
-                    model=predictions, collection=collection, id=accession_number
-                )
                 logger.info(f"Predictions:\n{predictions}")
 
         return FWAction()
 
 
-class TextExtractionTask(ImpulseTask):
+class TextExtractionTask(FireTaskBase):
     _fw_name = "Text Extraction Task"
     path_array: list[str]
 
@@ -452,7 +355,55 @@ class TextExtractionTask(ImpulseTask):
     def _extract(content):
         pass
 
-    @track_emissions()
+    @staticmethod
+    def is_s3_path(path: str) -> bool:
+        """
+        Check if the path is an S3 URI.
+        Supports both s3:// and s3a:// formats.
+        """
+        return bool(re.match(r"^s3a?://", path))
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        """
+        Parse S3 path into bucket and key.
+
+        Args:
+            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+        Returns:
+            Tuple of (bucket, key)
+        """
+        # Remove s3:// or s3a:// prefix
+        path = re.sub(r"^s3a?://", "", s3_path)
+        # Split into bucket and key
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        """
+        Retrieve content from S3.
+
+        Args:
+            s3_path: S3 URI
+
+        Returns:
+            File content as bytes
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # Download file content
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+
+        return buffer.read()
+
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         return FWAction()
@@ -462,6 +413,76 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
     _fw_name = "MetsXML To HathiTrust Manifest Task"
     path: str
 
+    @staticmethod
+    def is_s3_path(path: str) -> bool:
+        """
+        Check if the path is an S3 URI.
+        Supports both s3:// and s3a:// formats.
+        """
+        return bool(re.match(r"^s3a?://", path))
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        """
+        Parse S3 path into bucket and key.
+
+        Args:
+            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+        Returns:
+            Tuple of (bucket, key)
+        """
+        # Remove s3:// or s3a:// prefix
+        path = re.sub(r"^s3a?://", "", s3_path)
+        # Split into bucket and key
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        """
+        Retrieve content from S3.
+
+        Args:
+            s3_path: S3 URI
+
+        Returns:
+            File content as bytes
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # Download file content
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+
+        return buffer.read()
+
+    def save_to_s3(self, s3_path: str, content: str) -> str:
+        """
+        Save string content to S3.
+
+        Args:
+            s3_path: S3 URI (e.g. s3://bucket/key)
+            content: File content as a string
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        s3_client = boto3.client("s3")
+
+        # Convert string to bytes
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content.encode("utf-8"),  # Encode string as bytes
+        )
+
+        return s3_path
+
     def _convert_mets_to_yml(*args):
         """
         FireWorks task function: Convert a METS XML file from S3 into a YAML file
@@ -470,7 +491,6 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         args[1] = filename
         args[2] = accession_number
         """
-        import lxml.etree.ElementTree as ET
 
         s3_key = args[0]
         filename = args[1]
@@ -489,7 +509,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
 
         # === Step 2: Parse the XML directly from memory ===
         try:
-            parser = ET.XMLParser()
+            parser = ET.XMLParser(remove_blank_text=True)
             tree = ET.ElementTree(ET.fromstring(data, parser))
             root = tree.getroot()
         except ET.XMLSyntaxError as e:
@@ -643,7 +663,6 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         yaml_content: str = "\n".join(yaml_lines)
         return yaml_content
 
-    @track_emissions()
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         logger.info("Now loading content from S3")
@@ -657,10 +676,11 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         return FWAction(update_spec={"hathitrust_yaml_path": s3_path})
 
 
-class ExtractMetadata(ImpulseTask):
+class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
-    def _ask_ai_func(self, gpes, people):
+    @staticmethod
+    def ask_ai(gpes, people):
         prompt = f"""
             You are given the following information extracted from a document:
 
@@ -678,61 +698,42 @@ class ExtractMetadata(ImpulseTask):
             "key_people": ["...", "..."]
             }}
         """
+        from ollama import chat
 
-        response = self.call_llm(prompt)
-
-        try:
-            return json.loads(response)
-        except:
-            return {"main_place": None, "key_people": []}
-
-    def _call_llm(self, prompt):
-        # LOCAL MOCK — replace later with real model
-        return json.dumps(
-            {
-                "main_place": "Chicago, Illinois",
-                "key_people": ["John Doe", "Jane Smith"],
-            }
+        response = chat(
+            model="gemma3:270m",
+            messages=[{"role": "user", "content": prompt}],
         )
+        print(response.message.content)
+        return response.message.content
 
-    @track_emissions
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        docs_path = Path(fw_spec["docs_path"])
-        ner_dir = Path(fw_spec["ner_dir"])
-        output_path = Path(fw_spec["output_path"])
-        # load docs dict
-        with open(docs_path, "r", encoding="utf-8") as f:
-            docs_dict = json.load(f)
+    def run_task(self, fw_spec):
+        import spacy
+
+        text = fw_spec["input_text"]
+
+        nlp = spacy.load("en_core_web_sm")
 
         results = {}
 
-        # ------------------
-        # Loop through NER
-        # ------------------
-        for ner_file in ner_dir.glob("*.json"):
-            with open(ner_file, "r") as f:
-                ner_data = json.load(f)
+        doc = nlp(text)
 
-            doc_id = ner_file.stem
+        gpes = []
+        people = []
 
-            # ---- Extract entities ----
-            gpes = [e["text"] for e in ner_data["entities"] if e["label"] == "GPE"]
-            people = [e["text"] for e in ner_data["entities"] if e["label"] == "PERSON"]
+        for ent in doc.ents:
+            if ent.label_ == "GPE":
+                gpes.append(ent.text)
+            elif ent.label_ == "PERSON":
+                people.append(ent.text)
 
-            gpes = list(dict.fromkeys(gpes))
-            people = list(dict.fromkeys(people))
+        gpes = list(dict.fromkeys(gpes))
+        people = list(dict.fromkeys(people))
 
-            # ---- AI step ----
-            summary = self._ask_ai_func(gpes, people)
-
-            # ---- Combine with docs ----
-            results[doc_id] = {"original_doc": docs_dict[doc_id], "metadata": summary}
-
-        # ------------------
-        # Save final metadata
-        # ------------------
-        with open(output_path, "w") as f:
-            json.dump(results, f)
-
-        return FWAction(update_spec={"metadata_path": str(output_path)})
+        metadata = {
+            "gpes": gpes,
+            "people": people,
+        }
+        print(metadata)
+        self.ask_ai(gpes=gpes, people=people)
+        return FWAction()
