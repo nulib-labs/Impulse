@@ -27,37 +27,11 @@ fp = FilePad(
 )
 
 
-class BinarizationTask(FireTaskBase):
-    _fw_name = "Binarization Task"
-    output_path: str | None
-
-    @staticmethod
-    def _save_content(output_path, content):
-        import cv2
-
-        _ = cv2.imwrite(output_path, content)
-        pass
-
-    @staticmethod
-    def _binarize(content: bytes) -> bytes:
-        import cv2
-        import numpy as np
-
-        arr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Failed to decode image.")
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        success, encoded = cv2.imencode(".png", binary)
-        if not success:
-            raise ValueError("Failed to encode binarized image.")
-
-        return encoded.tobytes()
+class ImpulseTask(FireTaskBase):
+    """
+    Extends the FireTaskBase with helper functions common to all
+    tasks in Impulse
+    """
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -107,38 +81,6 @@ class BinarizationTask(FireTaskBase):
         buffer.seek(0)
 
         return buffer.read()
-
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        """
-        This method runs the binarization task.
-        This task takes one spec entry: `path` of type `str`
-        """
-        path_array_key = fw_spec["find_path_array_in"]
-        path_array: str = fw_spec[path_array_key]
-        binarized_objects: list[tuple[str, str]]
-        binarized_objects = []
-        for path in path_array:
-            logger.info(f"`path` is {path}")
-            if self.is_s3_path(path):
-                logger.info("Now loading content from S3")
-                content = self.get_s3_content(path)
-                binarized = self._binarize(content)
-            else:
-                with open(path, "rb") as f:
-                    content = f.read()
-                binarized = self._binarize(content)
-            id, identifier = fp.add_contents(
-                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
-            )
-            binarized_objects.append((id, identifier))
-
-        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
-        return FWAction(update_spec={"binarized_objects": binarized_objects})
-
-
-class DocumentExtractionTask(FireTaskBase):
-    _fw_name = "Document Extraction Task"
 
     def filetype(self, contents: bytes) -> str | None:
         """
@@ -197,6 +139,71 @@ class DocumentExtractionTask(FireTaskBase):
             pass
 
         return None
+
+
+class BinarizationTask(ImpulseTask):
+    _fw_name = "Binarization Task"
+    output_path: str | None
+
+    @staticmethod
+    def _save_content(output_path, content):
+        import cv2
+
+        _ = cv2.imwrite(output_path, content)
+        pass
+
+    @staticmethod
+    def _binarize(content: bytes) -> bytes:
+        import cv2
+        import numpy as np
+
+        arr = np.frombuffer(content, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise ValueError("Failed to decode image.")
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        success, encoded = cv2.imencode(".png", binary)
+        if not success:
+            raise ValueError("Failed to encode binarized image.")
+
+        return encoded.tobytes()
+
+    @override
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        """
+        This method runs the binarization task.
+        This task takes one spec entry: `path` of type `str`
+        """
+        path_array_key = fw_spec["find_path_array_in"]
+        path_array: str = fw_spec[path_array_key]
+        binarized_objects: list[tuple[str, str]]
+        binarized_objects = []
+        for path in path_array:
+            logger.info(f"`path` is {path}")
+            if self.is_s3_path(path):
+                logger.info("Now loading content from S3")
+                content = self.get_s3_content(path)
+                binarized = self._binarize(content)
+            else:
+                with open(path, "rb") as f:
+                    content = f.read()
+                binarized = self._binarize(content)
+            id, identifier = fp.add_contents(
+                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
+            )
+            binarized_objects.append((id, identifier))
+
+        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
+        return FWAction(update_spec={"binarized_objects": binarized_objects})
+
+
+class DocumentExtractionTask(ImpulseTask):
+    _fw_name = "Document Extraction Task"
 
     def _predict(self, contents):
         from marker.converters.pdf import PdfConverter
@@ -347,62 +354,13 @@ class DocumentExtractionTask(FireTaskBase):
         return FWAction()
 
 
-class TextExtractionTask(FireTaskBase):
+class TextExtractionTask(ImpulseTask):
     _fw_name = "Text Extraction Task"
     path_array: list[str]
 
     @staticmethod
     def _extract(content):
         pass
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
 
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
@@ -413,76 +371,6 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
     _fw_name = "MetsXML To HathiTrust Manifest Task"
     path: str
 
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
-
-    def save_to_s3(self, s3_path: str, content: str) -> str:
-        """
-        Save string content to S3.
-
-        Args:
-            s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as a string
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        s3_client = boto3.client("s3")
-
-        # Convert string to bytes
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),  # Encode string as bytes
-        )
-
-        return s3_path
-
     def _convert_mets_to_yml(*args):
         """
         FireWorks task function: Convert a METS XML file from S3 into a YAML file
@@ -491,6 +379,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         args[1] = filename
         args[2] = accession_number
         """
+        import lxml.etree.ElementTree as ET
 
         s3_key = args[0]
         filename = args[1]
@@ -509,7 +398,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
 
         # === Step 2: Parse the XML directly from memory ===
         try:
-            parser = ET.XMLParser(remove_blank_text=True)
+            parser = ET.XMLParser()
             tree = ET.ElementTree(ET.fromstring(data, parser))
             root = tree.getroot()
         except ET.XMLSyntaxError as e:
@@ -676,51 +565,10 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         return FWAction(update_spec={"hathitrust_yaml_path": s3_path})
 
 
-class ExtractMetadata(FireTaskBase):
+class ExtractMetadata(ImpulseTask):
     _fw_name = "Extract Metadata"
 
-    def run_task(self, fw_spec):
-        docs_path = Path(fw_spec["docs_path"])
-        ner_dir = Path(fw_spec["ner_dir"])
-        output_path = Path(fw_spec["output_path"])
-
-        # load docs dict
-        with open(docs_path, "r", encoding="utf-8") as f:
-            docs_dict = json.load(f)
-
-        results = {}
-
-        # ------------------
-        # Loop through NER
-        # ------------------
-        for ner_file in ner_dir.glob("*.json"):
-            with open(ner_file, "r") as f:
-                ner_data = json.load(f)
-
-            doc_id = ner_file.stem
-
-            # ---- Extract entities ----
-            gpes = [e["text"] for e in ner_data["entities"] if e["label"] == "GPE"]
-            people = [e["text"] for e in ner_data["entities"] if e["label"] == "PERSON"]
-
-            gpes = list(dict.fromkeys(gpes))
-            people = list(dict.fromkeys(people))
-
-            # ---- AI step ----
-            summary = self.ask_ai_func(gpes, people)
-
-            # ---- Combine with docs ----
-            results[doc_id] = {"original_doc": docs_dict[doc_id], "metadata": summary}
-
-        # ------------------
-        # Save final metadata
-        # ------------------
-        with open(output_path, "w") as f:
-            json.dump(results, f)
-
-        return FWAction(update_spec={"metadata_path": str(output_path)})
-
-    def ask_ai_func(self, gpes, people):
+    def _ask_ai_func(self, gpes, people):
         prompt = f"""
             You are given the following information extracted from a document:
 
@@ -747,25 +595,23 @@ class ExtractMetadata(FireTaskBase):
             return {"main_place": None, "key_people": []}
 
     def call_llm(self, prompt):
-<<<<<<< HEAD
         from openai import OpenAI
 
         client = OpenAI(
             api_key="EMPTY",
-            base_url="http://localhost:8000/v1"  # adjust port if needed
+            base_url="http://localhost:8000/v1",  # adjust port if needed
         )
 
         response = client.chat.completions.create(
             model="google/gemma-3-27b-it",  # must match what you launched vLLM with
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.1,  # low temp for deterministic structured output
-            max_tokens=256,   # JSON response is short, no need for more
+            max_tokens=256,  # JSON response is short, no need for more
         )
 
         return response.choices[0].message.content.strip()
-=======
+
+    def _call_llm(self, prompt):
         # LOCAL MOCK — replace later with real model
         return json.dumps(
             {
@@ -774,4 +620,42 @@ class ExtractMetadata(FireTaskBase):
             }
         )
 
->>>>>>> 37c9039 (Fix tasks)
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        docs_path = Path(fw_spec["docs_path"])
+        ner_dir = Path(fw_spec["ner_dir"])
+        output_path = Path(fw_spec["output_path"])
+        # load docs dict
+        with open(docs_path, "r", encoding="utf-8") as f:
+            docs_dict = json.load(f)
+
+        results = {}
+
+        # ------------------
+        # Loop through NER
+        # ------------------
+        for ner_file in ner_dir.glob("*.json"):
+            with open(ner_file, "r") as f:
+                ner_data = json.load(f)
+
+            doc_id = ner_file.stem
+
+            # ---- Extract entities ----
+            gpes = [e["text"] for e in ner_data["entities"] if e["label"] == "GPE"]
+            people = [e["text"] for e in ner_data["entities"] if e["label"] == "PERSON"]
+
+            gpes = list(dict.fromkeys(gpes))
+            people = list(dict.fromkeys(people))
+
+            # ---- AI step ----
+            summary = self._ask_ai_func(gpes, people)
+
+            # ---- Combine with docs ----
+            results[doc_id] = {"original_doc": docs_dict[doc_id], "metadata": summary}
+
+        # ------------------
+        # Save final metadata
+        # ------------------
+        with open(output_path, "w") as f:
+            json.dump(results, f)
+
+        return FWAction(update_spec={"metadata_path": str(output_path)})
