@@ -14,6 +14,7 @@ from pymongo import MongoClient
 import json
 from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
+import base64
 
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
@@ -745,21 +746,9 @@ class SummariesTask(FireTaskBase):
     _fw_name = "Summaries Task"
 
     def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
         bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
         s3_client = boto3.client("s3")
 
-        # Download file content
         buffer = BytesIO()
         s3_client.download_fileobj(bucket, key, buffer)
         buffer.seek(0)
@@ -767,30 +756,64 @@ class SummariesTask(FireTaskBase):
         return buffer.read()
 
     @staticmethod
-    def ask_ai(document):
-        # I don't think this makes any sense. How is it to identify most important people? There is no context on the people.
-        prompt = f"""
-            Provide a short summary of the document below. Do not return anything except for plain text summary. Use markdown if necessary. But only if necessary. 
-
-            {document}
-        """
+    def ask_ai(document_text=None, pdf_bytes=None):
         from ollama import chat
 
+        prompt = """
+        Provide a short summary of the document. 
+        Do not return anything except plain text summary.
+        Use markdown only if necessary.
+        """
+
+        message = {
+            "role": "user",
+            "content": prompt,
+        }
+
+        # If PDF is provided, encode and attach
+        if pdf_bytes:
+            encoded_pdf = base64.b64encode(pdf_bytes).decode()
+            message["images"] = [encoded_pdf]
+
+        # If plain text provided, include in prompt
+        if document_text:
+            message["content"] += f"\n\n{document_text}"
+
         response = chat(
-            model="gemma3:270m",
-            messages=[{"role": "user", "content": prompt}],
+            model="gemma3:4b",
+            messages=[message],
         )
-        print(response.message.content)
+
         return response.message.content
 
     def run_task(self, fw_spec):
         document = fw_spec["document"]
-        document_text = []
+
+        # Case 1: PDF path string
+        if isinstance(document, str) and document.lower().endswith(".pdf"):
+            if document.startswith("s3://"):
+                pdf_bytes = self.get_s3_content(document)
+            else:
+                with open(document, "rb") as f:
+                    pdf_bytes = f.read()
+
+            summary = self.ask_ai(pdf_bytes=pdf_bytes)
+            return FWAction(update_spec={"document_summary": summary})
+
+        # Case 2: List of S3 paths (text files assumed)
         if isinstance(document, list):
+            document_text = []
             for i in document:
-                document_text.append(self.get_s3_content(i))
+                content = self.get_s3_content(i)
+                document_text.append(content.decode("utf-8"))
 
-            return "\n".join(document_text)
+            combined = "\n".join(document_text)
+            summary = self.ask_ai(document_text=combined)
+            return FWAction(update_spec={"document_summary": summary})
 
-        summary = self.ask_ai(document_text)
-        return FWAction(update_spec={"document_summary": summary})
+        # Case 3: Plain string text
+        if isinstance(document, str):
+            summary = self.ask_ai(document_text=document)
+            return FWAction(update_spec={"document_summary": summary})
+
+        raise ValueError("Unsupported document type")
