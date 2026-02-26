@@ -693,274 +693,34 @@ INDEX_URL = "https://nu-impulse-production.s3.us-east-1.amazonaws.com/"
 MAX_WORDS = 980000
 
 
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-skipped_txt = 0  # simple global counter; fine for single-process use
-
-def s3_write_json(s3_path: str, data: dict):
-    bucket, key = s3_path.replace("s3://", "").split("/", 1)
-    boto3.client("s3").put_object(
-        Bucket=bucket, Key=key, Body=json.dumps(data, ensure_ascii=False)
-    )
-
-def s3_read_json(s3_path: str) -> dict:
-    bucket, key = s3_path.replace("s3://", "").split("/", 1)
-    obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
-    return json.loads(obj["Body"].read().decode("utf-8"))
-
-def get_doc_id(url: str) -> str | None:
-    """Extract document ID of the form P####_############## from a URL."""
-    match = re.search(r"(P\d{4}_\d{14})", url, re.IGNORECASE)
-    return match.group(1) if match else None
-
-
-def extract_page_number(url: str) -> int:
-    """Extract the 8-digit page number from a TXT URL for correct page ordering."""
-    match = re.search(r"_(\d{8})\.txt", url)
-    return int(match.group(1)) if match else 0
-
-
-def get_txt_urls() -> list[str]:
-    """Scrape the Impulse S3 index page and return all .txt file URLs."""
-    html = requests.get(INDEX_URL).text
-    soup = BeautifulSoup(html, "html.parser")
-    urls = []
-
-    for link in soup.find_all("a"):
-        href = link.get("href")
-        if not href or not href.endswith(".txt"):
-            continue
-
-        # Strip the bucket prefix if it was embedded in the href
-        if href.startswith(INDEX_URL):
-            href = href[len(INDEX_URL):]
-
-        if href.startswith("http"):
-            urls.append(href)
-        else:
-            urls.append(INDEX_URL + href)
-
-    return urls
-
-
-def download_txt(url: str) -> str:
-    """Download a single .txt page; returns empty string on failure."""
-    global skipped_txt
-    try:
-        r = requests.get(url, timeout=3)
-        if "AccessDenied" in r.text:
-            skipped_txt += 1
-            return ""
-        r.raise_for_status()
-        return r.text
-    except Exception:
-        skipped_txt += 1
-        return ""
-
-
-def clean_text(text: str) -> str:
-    if not text:
-        return ""
-    text = re.sub(r"[•·●■□◆◇]+", " ", text)
-    text = re.sub(r"(?m)^[\d\W_]{1,5}$", " ", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"\b(bbox|polygon|confidence|bbox_valid|text)\b", " ", text)
-    text = re.sub(r"\[[^\]]*\]", " ", text)
-    return text.strip()
-
-def group_urls_by_doc(urls: list[str]) -> dict[str, list[str]]:
-    groups: dict[str, list[str]] = defaultdict(list)
-    for url in urls:
-        doc_id = get_doc_id(url)
-        if doc_id:
-            groups[doc_id].append(url)
-    return groups
-
-
-def load_grouped_docs(grouped_urls: dict, limit: int | None = None) -> dict[str, str]:
-    """Download and concatenate all pages for each doc, in page order."""
-    docs: dict[str, str] = {}
-    items = list(grouped_urls.items())
-    if limit:
-        items = items[:limit]
-
-    for doc_id, url_list in items:
-        url_list_sorted = sorted(url_list, key=extract_page_number)
-
-        with ThreadPoolExecutor(max_workers=32) as ex:
-            future_to_url = {ex.submit(download_txt, url): url for url in url_list_sorted}
-
-            page_results: dict[str, str] = {}
-            for fut in tqdm(
-                as_completed(future_to_url),
-                total=len(future_to_url),
-                desc=f"Doc {doc_id}",
-            ):
-                url = future_to_url[fut]
-                page_results[url] = clean_text(fut.result())
-
-        # Reassemble in sorted order after all futures complete
-        docs[doc_id] = "\n".join(page_results[url] for url in url_list_sorted)
-
-    return docs
 
 
 # ---------------------------------------------------------------------------
-# Task 1 — Fetch docs from Impulse S3 and persist as a single JSON
+# Metadata
 # ---------------------------------------------------------------------------
 
-class FetchDocs(FireTaskBase):
-    """
-    Scrapes the Impulse S3 index, downloads every .txt page, cleans and
-    concatenates them in page order, then writes a single JSON file mapping
-    doc_id -> full cleaned text.
 
-    fw_spec keys consumed
-    ---------------------
-    docs_path : str       -- where to write the combined-text JSON
-    doc_limit : int|None  -- optional cap on number of docs (useful for testing)
-    """
-
-    _fw_name = "Fetch Docs"
-
-    def run_task(self, fw_spec):
-        debug = fw_spec.get("debug", False)
-
-        docs_path = fw_spec["docs_path"]
-        limit     = fw_spec.get("doc_limit", None)
-
-        # 1. Discover all TXT URLs from Impulse
-        print("Scraping Impulse index for .txt URLs ...")
-        all_urls = get_txt_urls()
-        print(f"  Found {len(all_urls)} .txt URLs")
-
-        grouped = group_urls_by_doc(all_urls)
-        print(f"  Grouped into {len(grouped)} documents")
-
-        # 2. Download, clean, and concatenate pages
-        docs_dict = load_grouped_docs(grouped, limit=limit)
-        print(f"  Downloaded {len(docs_dict)} documents  (skipped pages: {skipped_txt})")
-
-    # 3. Persist
-        if debug:
-            local_path = Path.cwd() / "overall_concat_docs_dict.json"
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(docs_dict, f, ensure_ascii=False, indent=2)
-            print(f"  [DEBUG] Saved docs to {local_path}")
-            return FWAction(update_spec={"docs_path": str(local_path)})
-        else:
-            s3_write_json(docs_path, docs_dict)
-            print(f"  Saved docs to {docs_path}")
-
-            return FWAction(update_spec={"docs_path": docs_path})
-
-
-
-# ---------------------------------------------------------------------------
-# Task 2 -- Run NER on fetched docs, call LLM, produce final metadata JSON
-# ---------------------------------------------------------------------------
-
-class ExtractMetadata(FireTaskBase):
-    """
-    Loads the docs JSON written by FetchDocs, runs spaCy NER on each document
-    in-memory (no intermediate NER files on disk), calls a local LLM to
-    resolve the main location and key people, then writes a final metadata JSON:
-
-        {
-          "<doc_id>": {
-            "doc_id":     "<doc_id>",
-            "main_place": "...",
-            "key_people": ["...", ...]
-          },
-          ...
-        }
-
-    fw_spec keys consumed
-    ---------------------
-    docs_path   : str  -- path to the combined-text JSON (written by FetchDocs)
-    output_path : str  -- where to write the final metadata JSON
-    spacy_model : str  -- spaCy model name (default: "en_core_web_sm")
-    """
-
-    _fw_name = "Extract Metadata"
+class GetMetadata(FireTaskBase):
+    _fw_name = "Get Metadata"
 
     @staticmethod
-    def truncate_text(text: str, max_words: int = MAX_WORDS) -> str:
-        words = text.split()
-        return " ".join(words[:max_words]) if len(words) > max_words else text
-        
-    def run_task(self, fw_spec):
+    def s3_read_json(s3_path: str) -> dict:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read().decode("utf-8"))
 
-        debug = fw_spec.get("debug", False)
+    @staticmethod
+    def s3_write_json(s3_path: str, data: dict) -> None:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
 
-        import socket
-        llm_host = f"http://{socket.gethostname()}:8000/v1"
-
-
-        docs_path   = fw_spec["docs_path"]
-        output_path = fw_spec["output_path"]
-        model       = fw_spec.get("spacy_model", "en_core_web_sm")
-
-        # 1. Load docs
-        if debug:
-            with open(docs_path, "r", encoding="utf-8") as f:
-                docs_dict = json.load(f)
-        else:
-            docs_dict = s3_read_json(docs_path)
-
-
-        # 2. Load spaCy model once for the whole run
-        nlp = spacy.load(model)
-
-        results = {}
-
-        # 3. NER -> LLM loop
-        for doc_id, text in tqdm(docs_dict.items(), desc="NER + LLM", total=len(docs_dict)):
-
-            # Run NER
-            spacy_doc = nlp(self.truncate_text(text))
-
-            # Deduplicate while preserving first-seen order
-            gpes = list(dict.fromkeys(
-                ent.text for ent in spacy_doc.ents if ent.label_ == "GPE"
-            ))
-            people = list(dict.fromkeys(
-                ent.text for ent in spacy_doc.ents if ent.label_ == "PERSON"
-            ))
-
-            # Call LLM
-            places_n_people = self.ask_ai_func(gpes, people, raw_text=text, host=llm_host)
-
-
-
-            # Collect result
-            results[doc_id] = {
-                "doc_id":     doc_id,
-                "main_place": places_n_people.get("main_place"),
-                "key_people": places_n_people.get("key_people", [])
-            }
-
-        # 4. Save
-        if debug:
-            local_path = Path.cwd() / "dates_people_metadata.json"
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
-            print(f"  [DEBUG] Saved metadata to {local_path}")
-            return FWAction(update_spec={"metadata_path": str(local_path)})
-        else:
-            s3_write_json(output_path, results)
-            return FWAction(update_spec={"metadata_path": output_path})
-
-
-    # LLM helpers
-
-    def ask_ai_func(self, gpes, people, raw_text="", host=None):
+    def ask_ai_func(self, gpes, people, text=""):
 
         prompt = f"""
     Document text (first 2000 words):
-    {" ".join(raw_text.split()[:2000])}
+    {" ".join(text.split()[:2000])}
 
     Places mentioned by NER: {gpes}
     People mentioned by NER: {people}
@@ -980,41 +740,104 @@ explanations. Return ONLY this exact format:
   "main_place": "...",
   "key_people": ["...", "..."]
 }}
-"""
-        response = self.call_llm(prompt, host=host)
+        """
 
+        from ollama import chat
 
-        # Strip accidental markdown fences before parsing
-        response = re.sub(r"```(?:json)?|```", "", response).strip()
-
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            return {"main_place": None, "key_people": []}
-
-    def call_llm(self, prompt: str, host: str) -> str:
-        client = OpenAI(api_key="EMPTY", base_url=host)
-
-        response = client.chat.completions.create(
-            model="google/gemma-3-27b-it",
+        response = chat(
+            model="gemma3:270m",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=256,
         )
 
-        return response.choices[0].message.content.strip()
+        raw = response.message.content
+        raw = re.sub(r"```(?:json)?|```", "", raw).strip()
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"main_place": None, "key_people": None}
+
+    def run_task(self, fw_spec):
+        import spacy
+
+        debug = fw_spec.get("debug", False)
+
+        nlp = spacy.load("en_core_web_sm")
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = self.s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            doc = nlp(text)
+
+            gpes = []
+            people = []
+
+            for ent in doc.ents:
+                if ent.label_ == "GPE":
+                    gpes.append(ent.text)
+                elif ent.label_ == "PERSON":
+                    people.append(ent.text)
+
+            gpes = list(dict.fromkeys(gpes))
+            people = list(dict.fromkeys(people))
+
+            # call ai
+            ai_result = self.ask_ai_func(gpes=gpes, people=people, text=text)
+
+            results[doc_id] = {
+                "doc_id":     doc_id,
+                "main_place": ai_result.get("main_place"),
+                "key_people": ai_result.get("key_people"),
+            }
+
+        # Save
+        if debug:
+            local_path = Path.cwd() / "overall_metadata.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved metadata to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            self.s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
 
 
 
+# ---------------------------------------------------------------------------
+# Summaries
+# ---------------------------------------------------------------------------
 
-#-------------------------------------------------------------------------
-#SUMMARIES
-#-------------------------------------------------------------------------
+
+class Summaries(FireTaskBase):
+    _fw_name = "Summaries"
+    path: str
+
+    @staticmethod
+    def s3_read_json(s3_path: str) -> dict:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read().decode("utf-8"))
+
+    @staticmethod
+    def s3_write_json(s3_path: str, data: dict) -> None:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
 
     def ask_ai_func_summaries(self, raw_text="", host=None):
         max_chars = 24000  # 6k tokens (ok for gemma 27b, maybe don't use a smaller model)
         was_truncated = False
-        
+
         if len(raw_text) > max_chars:
             # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
             chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
@@ -1052,13 +875,6 @@ Task: summarize...
 
         return response.choices[0].message.content.strip()
 
-#helper for following taskkkk
-
-
-class Summaries(FireTaskBase):
-    _fw_name = "Summaries"
-    path: str
-
     def run_task(self, fw_spec):
 
         debug = fw_spec.get("debug", False)
@@ -1074,15 +890,15 @@ class Summaries(FireTaskBase):
             with open(docs_path, "r", encoding="utf-8") as f:
                 docs_dict = json.load(f)
         else:
-            docs_dict = s3_read_json(docs_path)
+            docs_dict = self.s3_read_json(docs_path)
 
         results = {}
         for doc_id, text in docs_dict.items():
             summary = self.ask_ai_func_summaries(raw_text=text, host=llm_host)
 
             results[doc_id] = {
-                "doc_id":     doc_id,
-                "summary": summary.get("summary"), #THIS MEANS RESPONSE MUST HAVE "summary"
+                "doc_id":  doc_id,
+                "summary": summary.get("summary"),  #THIS MEANS RESPONSE MUST HAVE "summary"
             }
 
         # 4. Save
@@ -1093,112 +909,5 @@ class Summaries(FireTaskBase):
             print(f"  [DEBUG] Saved metadata to {local_path}")
             return FWAction(update_spec={"metadata_path": str(local_path)})
         else:
-            s3_write_json(output_path, results)
-            return FWAction(update_spec={"metadata_path": output_path})
-
-
-
-
-
-
-#-------------------------------------------------------------------------
-#THEMES
-#-------------------------------------------------------------------------
-
-def ask_ai_func_themes(self, raw_text="", host=None):
-    max_chars = 10000
-    was_truncated = False
-    
-    if len(raw_text) > max_chars:
-        # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
-        chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
-        was_truncated = True
-    else:
-        chunk = raw_text
-
-    prompt = f"""
-Document text:
-{" ".join(chunk.split())}
-
-Task: Please assign this document to 1-3 themes from the following controlled vocabulary, based on the content of the document. The themes are broad topics that capture the main subjects of the document. Please ONLY return themes that are strongly supported by the text, and avoid making assumptions or inferences that aren't directly supported by the content. If you can't confidently assign any themes, return an empty list.
-
-Your response MUST be in this exact format:
-{"themes": ["theme1", "theme2", "theme3"]}
-Don't add any other text or ask follow up questions, just return the JSON with the themes. Here is the controlled vocabulary of themes to choose from:
-- Transportation Infrastructure
-- Energy Systems
-- Wildlife and Natural Areas
-- Water Systems
-- Urban Development
-- Industrial Production and Materials
-- Climate and Weather Modification
-- Governance and Institutional Control
-- Place Based Development Conflicts
-- Indigenous Narratives and Sovereignty
-"""
-
-    response = self.call_llm(prompt, host=host)
-
-    # Strip accidental markdown fences before parsing
-    response = re.sub(r"```(?:json)?|```", "", response).strip()
-
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        return {"themes": []}
-
-def call_llm(self, prompt: str, host: str) -> str:
-    client = OpenAI(api_key="EMPTY", base_url=host)
-
-    response = client.chat.completions.create(
-        model="google/gemma-3-27b-it",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        max_tokens=256,
-    )
-
-    return response.choices[0].message.content.strip()
-
-#helper for following taskkkk
-
-
-class Themes(FireTaskBase):
-    _fw_name = "Themes"
-    path: str
-
-    def run_task(self, fw_spec):
-
-        debug = fw_spec.get("debug", False)
-
-        import socket
-        llm_host = f"http://{socket.gethostname()}:8000/v1"
-
-        docs_path   = fw_spec["docs_path"]
-        output_path = fw_spec["output_path"]
-
-        # 1. Load docs
-        if debug:
-            with open(docs_path, "r", encoding="utf-8") as f:
-                docs_dict = json.load(f)
-        else:
-            docs_dict = s3_read_json(docs_path)
-
-        results = {}
-        for doc_id, text in docs_dict.items():
-            themes = self.ask_ai_func_themes(raw_text=text, host=llm_host)
-
-            results[doc_id] = {
-                "doc_id":     doc_id,
-                "themes": themes.get("themes", []), 
-            }
-
-        # 4. Save
-        if debug:
-            local_path = Path.cwd() / "overall_themes.json"
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
-            print(f"  [DEBUG] Saved metadata to {local_path}")
-            return FWAction(update_spec={"metadata_path": str(local_path)})
-        else:
-            s3_write_json(output_path, results)
+            self.s3_write_json(output_path, results)
             return FWAction(update_spec={"metadata_path": output_path})
