@@ -1,0 +1,10 @@
+name: "Test Summary"
+fws:
+  - fw_id: 1
+    name: "Summaries Task"
+    spec:
+      document: s3://nu-impulse-production/P0491_35556036555423/main.pdf
+      _tasks:
+        - _fw_name: "Summaries Task"
+links: []
+metadata: {}
