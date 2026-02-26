@@ -798,6 +798,7 @@ class SummariesTask(FireTaskBase):
                     pdf_bytes = f.read()
 
             summary = self.ask_ai(pdf_bytes=pdf_bytes)
+            print(summary)
             return FWAction(update_spec={"document_summary": summary})
 
         # Case 2: List of S3 paths (text files assumed)
@@ -809,11 +810,13 @@ class SummariesTask(FireTaskBase):
 
             combined = "\n".join(document_text)
             summary = self.ask_ai(document_text=combined)
+            print(summary)
             return FWAction(update_spec={"document_summary": summary})
 
         # Case 3: Plain string text
         if isinstance(document, str):
             summary = self.ask_ai(document_text=document)
+            print(summary)
             return FWAction(update_spec={"document_summary": summary})
 
         raise ValueError("Unsupported document type")
