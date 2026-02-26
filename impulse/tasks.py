@@ -745,6 +745,25 @@ class ExtractMetadata(FireTaskBase):
 class SummariesTask(FireTaskBase):
     _fw_name = "Summaries Task"
 
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        """
+        Parse S3 path into bucket and key.
+
+        Args:
+            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+        Returns:
+            Tuple of (bucket, key)
+        """
+        # Remove s3:// or s3a:// prefix
+        path = re.sub(r"^s3a?://", "", s3_path)
+        # Split into bucket and key
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
     def get_s3_content(self, s3_path: str) -> bytes:
         bucket, key = self.parse_s3_path(s3_path)
         s3_client = boto3.client("s3")
