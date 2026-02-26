@@ -1,13 +1,13 @@
-name: John
+name: Paul
 fws:
   - fw_id: 1
-    name: "Get Metadata"
+    name: "Context"
     spec:
       debug: false
       docs_path: "s3://nu-impulse-production/docs_with_digits.json"
-      output_path: "s3://nu-impulse-production/overall_metadata.json"
+      output_path: "s3://nu-impulse-production/overall_context.json"
       _tasks:
-        - _fw_name: Get Metadata
+        - _fw_name: Context
 
 links: {}
 metadata: {}
