@@ -680,40 +680,44 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
 class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
+    IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        path = re.sub(r"^s3a?://", "", s3_path)
+        parts = path.split("/", 1)
+        return parts[0], parts[1] if len(parts) > 1 else ""
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        bucket, key = self.parse_s3_path(s3_path)
+        buffer = BytesIO()
+        boto3.client("s3").download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+        return buffer.read()
+
+    @staticmethod
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        return [
+            base64.b64encode(page.get_pixmap(dpi=150).tobytes("png")).decode("utf-8")
+            for page in doc
+        ]
+
     @staticmethod
     def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
-        """
-        Use spaCy to extract unique GPE (place) and PERSON entities from text.
-
-        Returns a tuple of (gpes, people), each deduplicated and
-        preserving first-seen order.
-        """
         import spacy
-
         nlp = spacy.load("en_core_web_sm")
         doc = nlp(text)
-
-        gpes: list[str] = []
-        people: list[str] = []
-
+        gpes, people = [], []
         for ent in doc.ents:
             if ent.label_ == "GPE":
                 gpes.append(ent.text)
             elif ent.label_ == "PERSON":
                 people.append(ent.text)
-
-        gpes = list(dict.fromkeys(gpes))
-        people = list(dict.fromkeys(people))
-
-        return gpes, people
+        return list(dict.fromkeys(gpes)), list(dict.fromkeys(people))
 
     @staticmethod
-    def ask_ai(gpes: list[str], people: list[str], document_text=None, pdf_bytes=None):
-        """
-        Ask the LLM to identify the primary place and key people, seeding it
-        with entity lists that spaCy already extracted so the model has
-        grounded candidates to reason over.
-        """
+    def ask_ai(gpes: list[str], people: list[str], document_text=None, pdf_bytes=None, image_bytes=None):
         from ollama import chat
 
         prompt = f"""
@@ -733,8 +737,7 @@ Using these candidates (and the document text below, if provided), identify:
      place yourself; otherwise return null.
 
 2. Up to 6 KEY PEOPLE mentioned in the document.
-   - Prefer people who are subjects of the document over passing
-     references.
+   - Prefer people who are subjects of the document over passing references.
    - If all candidates look spurious, attempt to extract them yourself;
      otherwise return an empty list.
 
@@ -744,92 +747,65 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
   "key_people": ["<name>", "..."]
 }}
 """
-
-        message = {
-            "role": "user",
-            "content": prompt,
-        }
+        message = {"role": "user", "content": prompt}
 
         if pdf_bytes:
-            encoded_pdf = base64.b64encode(pdf_bytes).decode()
-            message["images"] = [encoded_pdf]
+            message["images"] = ExtractMetadata.pdf_to_images(pdf_bytes)
+        elif image_bytes:
+            message["images"] = [base64.b64encode(image_bytes).decode("utf-8")]
 
         if document_text:
             message["content"] += f"\n\nDocument text:\n{document_text}"
 
-        response = chat(
-            model="gemma3:4b",
-            messages=[message],
-        )
+        content = ""
+        for chunk in chat(model="gemma3:4b", messages=[message], stream=True):
+            if chunk.message.content:
+                content += chunk.message.content
+        return content
 
-        return response.message.content
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        path = re.sub(r"^s3a?://", "", s3_path)
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        bucket, key = self.parse_s3_path(s3_path)
-        s3_client = boto3.client("s3")
-
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
+    def _load_bytes(self, document: str) -> bytes:
+        if document.startswith(("s3://", "s3a://")):
+            logger.info("Document starts with s3, pulling from bucket")
+            return self.get_s3_content(document)
+        with open(document, "rb") as f:
+            return f.read()
 
     def run_task(self, fw_spec):
         document = fw_spec["document"]
 
-        # Case 1: PDF path string
+        # Case 1: PDF
         if isinstance(document, str) and document.lower().endswith(".pdf"):
-            if document.startswith("s3://"):
-                print("Document starts with s3, pulling from bucket")
-                pdf_bytes = self.get_s3_content(document)
-            else:
-                with open(document, "rb") as f:
-                    pdf_bytes = f.read()
-
-            # Best-effort plain-text extraction for spaCy entity seeding
+            pdf_bytes = self._load_bytes(document)
             try:
                 import pdfminer.high_level as pdfminer
-
                 plain_text = pdfminer.extract_text(BytesIO(pdf_bytes))
             except Exception:
                 plain_text = ""
-
-            gpes, people = (
-                self.extract_spacy_entities(plain_text) if plain_text else ([], [])
-            )
+            gpes, people = self.extract_spacy_entities(plain_text) if plain_text else ([], [])
             metadata = self.ask_ai(gpes=gpes, people=people, pdf_bytes=pdf_bytes)
-            print(metadata)
-            return FWAction(update_spec={"document_metadata": metadata})
 
-        # Case 2: List of S3 paths (text files assumed)
-        if isinstance(document, list):
-            document_text_parts = []
-            for path in document:
-                content = self.get_s3_content(path)
-                document_text_parts.append(content.decode("utf-8"))
+        # Case 2: Image file
+        elif isinstance(document, str) and os.path.splitext(document)[1].lower() in self.IMAGE_EXTENSIONS:
+            image_bytes = self._load_bytes(document)
+            metadata = self.ask_ai(gpes=[], people=[], image_bytes=image_bytes)
 
-            combined = "\n".join(document_text_parts)
+        # Case 3: List of S3/file paths (text files)
+        elif isinstance(document, list):
+            parts = [self.get_s3_content(p).decode("utf-8") for p in document]
+            combined = "\n".join(parts)
             gpes, people = self.extract_spacy_entities(combined)
             metadata = self.ask_ai(gpes=gpes, people=people, document_text=combined)
-            print(metadata)
-            return FWAction(update_spec={"document_metadata": metadata})
 
-        # Case 3: Plain string text
-        if isinstance(document, str):
+        # Case 4: Raw string text
+        elif isinstance(document, str):
             gpes, people = self.extract_spacy_entities(document)
             metadata = self.ask_ai(gpes=gpes, people=people, document_text=document)
-            print(metadata)
-            return FWAction(update_spec={"document_metadata": metadata})
 
-        raise ValueError("Unsupported document type")
+        else:
+            raise ValueError(f"Unsupported document type: {type(document)}")
+
+        print(metadata)
+        return FWAction(update_spec={"document_metadata": metadata})
 
 
 class SummariesTask(FireTaskBase):
