@@ -811,6 +811,7 @@ class SummariesTask(FireTaskBase):
         # Case 1: PDF path string
         if isinstance(document, str) and document.lower().endswith(".pdf"):
             if document.startswith("s3://"):
+                print("Document starts with s3, pulling from bucket")
                 pdf_bytes = self.get_s3_content(document)
             else:
                 with open(document, "rb") as f:
