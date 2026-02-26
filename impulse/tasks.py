@@ -681,7 +681,9 @@ class ExtractMetadata(FireTaskBase):
 
     @staticmethod
     def ask_ai(gpes, people):
+        # I don't think this makes any sense. How is it to identify most important people? There is no context on the people.
         prompt = f"""
+        
             You are given the following information extracted from a document:
 
             Places mentioned: {gpes}
@@ -736,4 +738,59 @@ class ExtractMetadata(FireTaskBase):
         }
         print(metadata)
         self.ask_ai(gpes=gpes, people=people)
+        return FWAction()
+
+
+class SummariesTask(FireTaskBase):
+    _fw_name = "Summaries Task"
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        """
+        Retrieve content from S3.
+
+        Args:
+            s3_path: S3 URI
+
+        Returns:
+            File content as bytes
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # Download file content
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+
+        return buffer.read()
+
+    @staticmethod
+    def ask_ai(document):
+        # I don't think this makes any sense. How is it to identify most important people? There is no context on the people.
+        prompt = f"""
+            Provide a short summary of the attached document:
+
+            {document}
+        """
+        from ollama import chat
+
+        response = chat(
+            model="gemma3:270m",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        print(response.message.content)
+        return response.message.content
+
+    def run_task(self, fw_spec):
+        document = fw_spec["document"]
+        document_text = []
+        if isinstance(document, list):
+            for i in document:
+                document_text.append(self.get_s3_content(i))
+
+            return "\n".join(document_text)
+
+        self.ask_ai(document_text)
         return FWAction()
