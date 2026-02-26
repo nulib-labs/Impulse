@@ -770,7 +770,7 @@ class SummariesTask(FireTaskBase):
     def ask_ai(document):
         # I don't think this makes any sense. How is it to identify most important people? There is no context on the people.
         prompt = f"""
-            Provide a short summary of the attached document:
+            Provide a short summary of the document below. Do not return anything except for plain text summary. Use markdown if necessary. But only if necessary. 
 
             {document}
         """
@@ -792,5 +792,5 @@ class SummariesTask(FireTaskBase):
 
             return "\n".join(document_text)
 
-        self.ask_ai(document_text)
-        return FWAction()
+        summary = self.ask_ai(document_text)
+        return FWAction(update_spec={"document_summary": summary})
