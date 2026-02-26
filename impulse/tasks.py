@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
 import base64
-
+import fitz
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
 collection = db["pages"]
@@ -747,18 +747,7 @@ class SummariesTask(FireTaskBase):
 
     @staticmethod
     def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
         path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
         parts = path.split("/", 1)
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
@@ -767,34 +756,46 @@ class SummariesTask(FireTaskBase):
     def get_s3_content(self, s3_path: str) -> bytes:
         bucket, key = self.parse_s3_path(s3_path)
         s3_client = boto3.client("s3")
-
         buffer = BytesIO()
         s3_client.download_fileobj(bucket, key, buffer)
         buffer.seek(0)
-
         return buffer.read()
 
     @staticmethod
-    def ask_ai(document_text=None, pdf_bytes=None):
-        from ollama import chat
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        """Convert each PDF page to a base64-encoded PNG string."""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            images.append(img_b64)
+        return images
 
+    @staticmethod
+    def image_to_b64(image_bytes: bytes) -> str:
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+    @staticmethod
+    def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
+        from ollama import chat
         prompt = """
-        Provide a short summary of the document. 
+        Provide a short summary of the document.
         Do not return anything except plain text summary.
         Use markdown only if necessary.
         """
-
         message = {
             "role": "user",
             "content": prompt,
         }
 
-        # If PDF is provided, encode and attach
         if pdf_bytes:
-            encoded_pdf = base64.b64encode(pdf_bytes).decode()
-            message["images"] = [encoded_pdf]
+            # Convert PDF pages to images — gemma3 can't read raw PDF bytes
+            message["images"] = SummariesTask.pdf_to_images(pdf_bytes)
 
-        # If plain text provided, include in prompt
+        elif image_bytes:
+            message["images"] = [SummariesTask.image_to_b64(image_bytes)]
+
         if document_text:
             message["content"] += f"\n\n{document_text}"
 
@@ -802,41 +803,48 @@ class SummariesTask(FireTaskBase):
             model="gemma3:4b",
             messages=[message],
         )
-
         return response.message.content
 
     def run_task(self, fw_spec):
         document = fw_spec["document"]
 
-        # Case 1: PDF path string
-        if isinstance(document, str) and document.lower().endswith(".pdf"):
-            if document.startswith("s3://"):
+        IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+        # Case 1: S3 or local file path
+        if isinstance(document, str) and (
+            document.startswith("s3://") or document.startswith("s3a://") or "/" in document
+        ):
+            ext = os.path.splitext(document)[1].lower()
+
+            if document.startswith(("s3://", "s3a://")):
                 print("Document starts with s3, pulling from bucket")
-                pdf_bytes = self.get_s3_content(document)
+                content_bytes = self.get_s3_content(document)
             else:
                 with open(document, "rb") as f:
-                    pdf_bytes = f.read()
+                    content_bytes = f.read()
 
-            summary = self.ask_ai(pdf_bytes=pdf_bytes)
-            print(summary)
-            return FWAction(update_spec={"document_summary": summary})
+            if ext == ".pdf":
+                summary = self.ask_ai(pdf_bytes=content_bytes)
+            elif ext in IMAGE_EXTENSIONS:
+                summary = self.ask_ai(image_bytes=content_bytes)
+            else:
+                # Treat as text file
+                summary = self.ask_ai(document_text=content_bytes.decode("utf-8"))
 
-        # Case 2: List of S3 paths (text files assumed)
-        if isinstance(document, list):
+        # Case 2: List of S3/file paths
+        elif isinstance(document, list):
             document_text = []
-            for i in document:
-                content = self.get_s3_content(i)
+            for path in document:
+                content = self.get_s3_content(path)
                 document_text.append(content.decode("utf-8"))
+            summary = self.ask_ai(document_text="\n".join(document_text))
 
-            combined = "\n".join(document_text)
-            summary = self.ask_ai(document_text=combined)
-            print(summary)
-            return FWAction(update_spec={"document_summary": summary})
-
-        # Case 3: Plain string text
-        if isinstance(document, str):
+        # Case 3: Raw string text
+        elif isinstance(document, str):
             summary = self.ask_ai(document_text=document)
-            print(summary)
-            return FWAction(update_spec={"document_summary": summary})
 
-        raise ValueError("Unsupported document type")
+        else:
+            raise ValueError(f"Unsupported document type: {type(document)}")
+
+        print(summary)
+        return FWAction(update_spec={"document_summary": summary})
