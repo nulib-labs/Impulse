@@ -953,24 +953,24 @@ class Themes(FireTaskBase):
 Document text:
 {" ".join(chunk.split())}
 
-Task: THEMES
-Assign 1-3 themes to each document. The themes are from this list ONLY, return the themes exaclty as written (if none of the themes apply, return an empty list):
+Task: Assign 1-3 themes to this document from the list below. Only use themes from this list, spelled exactly as written.
 
-Transportation Infrastructure
-Energy Systems
-Wildlife and Natural Areas
-Water Systems
-Urban Development
-Industrial Production and Materials
-Climate and Weather Modification
-Governance and Institutional Control
-Place Based Development Conflicts
-Indigenous Narratives and Sovereignty
+Themes:
+- Transportation Infrastructure
+- Energy Systems
+- Wildlife and Natural Areas
+- Water Systems
+- Urban Development
+- Industrial Production and Materials
+- Climate and Weather Modification
+- Governance and Institutional Control
+- Place Based Development Conflicts
+- Indigenous Narratives and Sovereignty
 
-Return the format of a dictionary in this exact format:
-  "themes": ["theme1", "theme2"]
- Don't ask any follow up questions, and make sure the document closely supports the themes you assign. If the document is too vague to assign any themes, return an empty list.
+Respond ONLY with valid JSON, no other text:
+{{"themes": ["theme1", "theme2"]}}
 
+If no themes apply or the document is too vague, return {{"themes": []}}
 """
         response = self.call_llm(prompt, host=host)
 
@@ -1196,15 +1196,16 @@ Document text:
 {" ".join(chunk.split())}
 
 Task: Context
-Please give a short explanation of context and outcome of this event. You can use outside knowledge for this question.
+Please give a short explanation of context and outcome of this event. You can use outside knowledge for this question but ONLY IF YOU ARE CONFIDENT and could give your source when asked.
 Explain if the project was excecuted, if it was cancelled, if it is still in progress, or if the outcome is unclear, and why.
 If the document is too vague to determine an outcome, return null.
 
 Please also include a 1 or 0 if the project happened or didn't happen. If you're unsure, return null.
 
-No follow up questions, just return a dictionary in this exact format:
-{{"context": "your summary here",
-"outcome": 0}}
+Only return a dictionary in one of these exact formats:
+{"context": "your summary here", "outcome": 1}
+{"context": "your summary here", "outcome": 0}
+{"context": "your summary here", "outcome": null}
 
 """
         response = self.call_llm(prompt, host=host)
@@ -1266,3 +1267,408 @@ No follow up questions, just return a dictionary in this exact format:
         else:
             self.s3_write_json(output_path, results)
             return FWAction(update_spec={"metadata_path": output_path})
+
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+
+
+class ThemesTask(FireTaskBase):
+    _fw_name = "Themes Task"
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        path = re.sub(r"^s3a?://", "", s3_path)
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        bucket, key = self.parse_s3_path(s3_path)
+        s3_client = boto3.client("s3")
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+        return buffer.read()
+
+    @staticmethod
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        """Convert each PDF page to a base64-encoded PNG string."""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            images.append(img_b64)
+        return images
+
+    @staticmethod
+    def image_to_b64(image_bytes: bytes) -> str:
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+    @staticmethod
+    def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
+        from ollama import chat
+        prompt = """
+        Task: Assign 1-3 themes to this document from the list below. Only use themes from this list, spelled exactly as written.
+            Themes:
+            - Transportation Infrastructure
+            - Energy Systems
+            - Wildlife and Natural Areas
+            - Water Systems
+            - Urban Development
+            - Industrial Production and Materials
+            - Climate and Weather Modification
+            - Governance and Institutional Control
+            - Place Based Development Conflicts
+            - Indigenous Narratives and Sovereignty
+
+            Respond ONLY with a list no other text:
+            ["theme1", "theme2"]
+
+            If no themes apply or the document is too vague, return []
+        """
+        message = {
+            "role": "user",
+            "content": prompt,
+        }
+
+        if pdf_bytes:
+            # Convert PDF pages to images — gemma3 can't read raw PDF bytes
+            message["images"] = ThemesTask.pdf_to_images(pdf_bytes)
+
+        elif image_bytes:
+            message["images"] = [ThemesTask.image_to_b64(image_bytes)]
+
+        if document_text:
+            message["content"] += f"\n\n{document_text}"
+
+        response = chat(
+            model="gemma3:4b",
+            messages=[message],
+        )
+        return response.message.content
+
+    def run_task(self, fw_spec):
+        document = fw_spec["document"]
+
+        IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+        # Case 1: S3 or local file path
+        if isinstance(document, str) and (
+            document.startswith("s3://") or document.startswith("s3a://") or "/" in document
+        ):
+            ext = os.path.splitext(document)[1].lower()
+
+            if document.startswith(("s3://", "s3a://")):
+                print("Document starts with s3, pulling from bucket")
+                content_bytes = self.get_s3_content(document)
+            else:
+                with open(document, "rb") as f:
+                    content_bytes = f.read()
+
+            if ext == ".pdf":
+                themes = self.ask_ai(pdf_bytes=content_bytes)
+            elif ext in IMAGE_EXTENSIONS:
+                themes = self.ask_ai(image_bytes=content_bytes)
+            else:
+                # Treat as text file
+                themes = self.ask_ai(document_text=content_bytes.decode("utf-8"))
+
+        # Case 2: List of S3/file paths
+        elif isinstance(document, list):
+            document_text = []
+            for path in document:
+                content = self.get_s3_content(path)
+                document_text.append(content.decode("utf-8"))
+            themes = self.ask_ai(document_text="\n".join(document_text))
+
+        # Case 3: Raw string text
+        elif isinstance(document, str):
+            themes = self.ask_ai(document_text=document)
+
+        else:
+            raise ValueError(f"Unsupported document type: {type(document)}")
+
+        print(themes)
+        try:
+            themes = json.loads(themes)
+            if not isinstance(themes, list):
+                themes = []
+        except (json.JSONDecodeError, TypeError):
+            themes = []
+        return FWAction(update_spec={"document_themes": themes})
+
+
+
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+    
+
+class QuotesTask(FireTaskBase):
+    _fw_name = "Quotes Task"
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        path = re.sub(r"^s3a?://", "", s3_path)
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        bucket, key = self.parse_s3_path(s3_path)
+        s3_client = boto3.client("s3")
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+        return buffer.read()
+
+    @staticmethod
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        """Convert each PDF page to a base64-encoded PNG string."""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            images.append(img_b64)
+        return images
+
+    @staticmethod
+    def image_to_b64(image_bytes: bytes) -> str:
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+    @staticmethod
+    def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
+        from ollama import chat
+        prompt = """
+    
+    Task: QUOTES
+    Locate a section explicitly labeled “Public Comment,” “Comments Received,” “Response to Comments,” or similar. If there is no clear section, please look for messages from individuals or organizations expressing support, opposition, or concerns about the project, proposal, or decision in the document, and use that as the section for this task.
+    - Identify text explicitly attributed to commenters. 
+    - Select 2–4 verbatim excerpts that reflect commonly repeated concerns or positions. Please try to select representative but interesting/evocative excerpts. Requirements: 
+    - Copy text exactly as written.
+    - Do not paraphrase. 
+    - Do not summarize. 
+    - Do not explain. 
+    - Output only the excerpts AND (if possible) the name of the commenter or organization, in this exact format "'quote text' - commenter/organization". If the commenter or organization is not named, just return the quote text in single quotes.
+    - You can clean the text, removing things like formatting issues, but do not change the wording.
+    - If the document contains no public comments or similar sections, or if the comments are too vague to extract meaningful excerpts, return an empty list.
+    ---------------------------------------- 
+    FORMAT YOUR RESPONSE EXACTLY AS: 
+    PUBLIC_COMMENT: ["'quote 1' - commenter1", "'quote 2' - commenter2"]
+
+        """
+        message = {
+            "role": "user",
+            "content": prompt,
+        }
+
+        if pdf_bytes:
+            # Convert PDF pages to images — gemma3 can't read raw PDF bytes
+            message["images"] = QuotesTask.pdf_to_images(pdf_bytes)
+
+        elif image_bytes:
+            message["images"] = [QuotesTask.image_to_b64(image_bytes)]
+
+        if document_text:
+            message["content"] += f"\n\n{document_text}"
+
+        response = chat(
+            model="gemma3:4b",
+            messages=[message],
+        )
+        return response.message.content
+
+    def run_task(self, fw_spec):
+        document = fw_spec["document"]
+
+        IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+        # Case 1: S3 or local file path
+        if isinstance(document, str) and (
+            document.startswith("s3://") or document.startswith("s3a://") or "/" in document
+        ):
+            ext = os.path.splitext(document)[1].lower()
+
+            if document.startswith(("s3://", "s3a://")):
+                print("Document starts with s3, pulling from bucket")
+                content_bytes = self.get_s3_content(document)
+            else:
+                with open(document, "rb") as f:
+                    content_bytes = f.read()
+
+            if ext == ".pdf":
+                quotes = self.ask_ai(pdf_bytes=content_bytes)
+            elif ext in IMAGE_EXTENSIONS:
+                quotes = self.ask_ai(image_bytes=content_bytes)
+            else:
+                # Treat as text file
+                quotes = self.ask_ai(document_text=content_bytes.decode("utf-8"))
+
+        # Case 2: List of S3/file paths
+        elif isinstance(document, list):
+            document_text = []
+            for path in document:
+                content = self.get_s3_content(path)
+                document_text.append(content.decode("utf-8"))
+            quotes = self.ask_ai(document_text="\n".join(document_text))
+
+        # Case 3: Raw string text
+        elif isinstance(document, str):
+            quotes = self.ask_ai(document_text=document)
+
+        else:
+            raise ValueError(f"Unsupported document type: {type(document)}")
+
+        print(quotes)
+        return FWAction(update_spec={"document_quotes": quotes})
+
+
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+    
+
+class ContextTask(FireTaskBase):
+    _fw_name = "Context Task"
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        path = re.sub(r"^s3a?://", "", s3_path)
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        bucket, key = self.parse_s3_path(s3_path)
+        s3_client = boto3.client("s3")
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+        return buffer.read()
+
+    @staticmethod
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        """Convert each PDF page to a base64-encoded PNG string."""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            images.append(img_b64)
+        return images
+
+    @staticmethod
+    def image_to_b64(image_bytes: bytes) -> str:
+        return base64.b64encode(image_bytes).decode("utf-8")
+
+    @staticmethod
+    def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
+        from ollama import chat
+        prompt = """
+        
+Task: Context
+Please give a short explanation of context and outcome of this event. You can use outside knowledge for this question but ONLY IF YOU ARE CONFIDENT and could give your source when asked.
+Explain if the project was excecuted, if it was cancelled, if it is still in progress, or if the outcome is unclear, and why.
+If the document is too vague to determine an outcome, return null.
+
+Please also include a 1 or 0 if the project happened or didn't happen. If you're unsure, return null.
+
+Only return a dictionary in one of these exact formats:
+{"context": "your summary here", "outcome": 1}
+{"context": "your summary here", "outcome": 0}
+{"context": "your summary here", "outcome": null}
+
+        """
+        message = {
+            "role": "user",
+            "content": prompt,
+        }
+
+        if pdf_bytes:
+            # Convert PDF pages to images — gemma3 can't read raw PDF bytes
+            message["images"] = ContextTask.pdf_to_images(pdf_bytes)
+
+        elif image_bytes:
+            message["images"] = [ContextTask.image_to_b64(image_bytes)]
+
+        if document_text:
+            message["content"] += f"\n\n{document_text}"
+
+        response = chat(
+            model="gemma3:4b",
+            messages=[message],
+        )
+        return response.message.content
+
+    def run_task(self, fw_spec):
+        document = fw_spec["document"]
+
+        IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+        # Case 1: S3 or local file path
+        if isinstance(document, str) and (
+            document.startswith("s3://") or document.startswith("s3a://") or "/" in document
+        ):
+            ext = os.path.splitext(document)[1].lower()
+
+            if document.startswith(("s3://", "s3a://")):
+                print("Document starts with s3, pulling from bucket")
+                content_bytes = self.get_s3_content(document)
+            else:
+                with open(document, "rb") as f:
+                    content_bytes = f.read()
+
+            if ext == ".pdf":
+                context = self.ask_ai(pdf_bytes=content_bytes)
+            elif ext in IMAGE_EXTENSIONS:
+                context = self.ask_ai(image_bytes=content_bytes)
+            else:
+                # Treat as text file
+                context = self.ask_ai(document_text=content_bytes.decode("utf-8"))
+
+        # Case 2: List of S3/file paths
+        elif isinstance(document, list):
+            document_text = []
+            for path in document:
+                content = self.get_s3_content(path)
+                document_text.append(content.decode("utf-8"))
+            context = self.ask_ai(document_text="\n".join(document_text))
+
+        # Case 3: Raw string text
+        elif isinstance(document, str):
+            context = self.ask_ai(document_text=document)
+
+        else:
+            raise ValueError(f"Unsupported document type: {type(document)}")
+
+        print(context)
+        return FWAction(update_spec={"document_context": context})
