@@ -1,4 +1,4 @@
-name: "Test Summary"
+name: "Test Metadata"
 fws:
   - fw_id: 1
     name: "Extract Metadata"
