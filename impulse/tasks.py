@@ -815,8 +815,6 @@ explanations. Return ONLY this exact format:
 # ---------------------------------------------------------------------------
 # Summaries
 # ---------------------------------------------------------------------------
-
-
 class Summaries(FireTaskBase):
     _fw_name = "Summaries"
     path: str
@@ -849,8 +847,12 @@ class Summaries(FireTaskBase):
 Document text:
 {" ".join(chunk.split())}
 
-Task: summarize...
-    summary summary summary summary  #FIX FIX FIX AAHHFOINFODN
+Task: SUMMARY
+Write a detailed summary of the document in approximately 125 words (minimum 70 words, maximum 150 words). The summary should explain:
+ - What project, proposal, or decision the document addresses, where is it, which agencies are involved, what is the goal.
+ - Only include information supported by the document text. - Do not introduce outside knowledge
+ - return only a dictionary in this exact format: 
+    "summary": "your text here" and don't ask any follow up questions. If the document is too vague to summarize, return "summary": null.
 """
 
         response = self.call_llm(prompt, host=host)
@@ -907,6 +909,359 @@ Task: summarize...
             with open(local_path, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
             print(f"  [DEBUG] Saved metadata to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            self.s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
+
+
+
+
+# ---------------------------------------------------------------------------
+# Themes
+# ---------------------------------------------------------------------------
+
+class Themes(FireTaskBase):
+    _fw_name = "Themes"
+    path: str
+
+    @staticmethod
+    def s3_read_json(s3_path: str) -> dict:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read().decode("utf-8"))
+
+    @staticmethod
+    def s3_write_json(s3_path: str, data: dict) -> None:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+
+    def ask_ai_func_themes(self, raw_text="", host=None):
+        max_chars = 24000  # 6k tokens (ok for gemma 27b, maybe don't use a smaller model)
+        was_truncated = False
+
+        if len(raw_text) > max_chars:
+            # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
+            chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
+            was_truncated = True
+        else:
+            chunk = raw_text
+
+        prompt = f"""
+Document text:
+{" ".join(chunk.split())}
+
+Task: THEMES
+Assign 1-3 themes to each document. The themes are from this list ONLY, return the themes exaclty as written (if none of the themes apply, return an empty list):
+
+Transportation Infrastructure
+Energy Systems
+Wildlife and Natural Areas
+Water Systems
+Urban Development
+Industrial Production and Materials
+Climate and Weather Modification
+Governance and Institutional Control
+Place Based Development Conflicts
+Indigenous Narratives and Sovereignty
+
+Return the format of a dictionary in this exact format:
+  "themes": ["theme1", "theme2"]
+ Don't ask any follow up questions, and make sure the document closely supports the themes you assign. If the document is too vague to assign any themes, return an empty list.
+
+"""
+        response = self.call_llm(prompt, host=host)
+
+        # Strip accidental markdown fences before parsing
+        response = re.sub(r"```(?:json)?|```", "", response).strip()
+
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"themes": []}
+
+    def call_llm(self, prompt: str, host: str) -> str:
+        client = OpenAI(api_key="EMPTY", base_url=host)
+
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=256,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    def run_task(self, fw_spec):
+
+        debug = fw_spec.get("debug", False)
+
+        import socket
+        llm_host = f"http://{socket.gethostname()}:8000/v1"
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # 1. Load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = self.s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            summary = self.ask_ai_func_themes(raw_text=text, host=llm_host)
+
+            results[doc_id] = {
+                "doc_id":  doc_id,
+                "themes": summary.get("themes", []),  #THIS MEANS RESPONSE MUST HAVE "themes"
+            }
+
+        # 4. Save
+        if debug:
+            local_path = Path.cwd() / "overall_themes.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved metadata to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            self.s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
+
+
+
+
+# ---------------------------------------------------------------------------
+# Quotes
+# ---------------------------------------------------------------------------
+
+class Quotes(FireTaskBase):
+    _fw_name = "Quotes"
+    path: str
+
+    @staticmethod
+    def extract_comment_section(raw_text: str) -> tuple[str, bool]:
+        """Try to find where public comments start, fall back to last N chars."""
+        markers = [
+            "public comment", "public hearing", "community comment",
+            "citizen comment", "oral comment", "written comment",
+            "comment period", "testimony", "public testimony"
+        ]
+        lower = raw_text.lower()
+        best_pos = -1
+        for marker in markers:
+            pos = lower.rfind(marker)  # rfind gets the LAST occurrence
+            if pos != -1 and pos > best_pos:
+                best_pos = pos
+        if best_pos != -1:
+            return raw_text[best_pos:], True
+        else:
+            return raw_text[-12000:], False
+
+    @staticmethod
+    def s3_read_json(s3_path: str) -> dict:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read().decode("utf-8"))
+
+    @staticmethod
+    def s3_write_json(s3_path: str, data: dict) -> None:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+
+    def ask_ai_func_quotes(self, raw_text="", host=None):
+        section, found = self.extract_comment_section(raw_text)
+
+        prompt = f"""
+Document text:
+{" ".join(section.split())}
+
+Task: QUOTES
+Locate a section explicitly labeled “Public Comment,” “Comments Received,” “Response to Comments,” or similar. If there is no clear section, please look for messages from individuals or organizations expressing support, opposition, or concerns about the project, proposal, or decision in the document, and use that as the section for this task.
+- Identify text explicitly attributed to commenters. 
+- Select 2–4 verbatim excerpts that reflect commonly repeated concerns or positions. Please try to select representative but interesting/evocative excerpts. Strict requirements: 
+- Copy text exactly as written.
+- Do not paraphrase. 
+- Do not summarize. 
+- Do not explain. 
+- Output only the excerpts AND (if possible) the name of the commenter or organization, in this exact format "'quote text' - commenter/organization". If the commenter or organization is not named, just return the quote text in single quotes.
+- You can clean the text, removing things like formatting issues, but do not change the wording.
+- If the document contains no public comments or similar sections, or if the comments are too vague to extract meaningful excerpts, return an empty list.
+---------------------------------------- 
+FORMAT YOUR RESPONSE EXACTLY AS: 
+PUBLIC_COMMENT: ["'quote 1' - commenter1", "'quote 2' - commenter2"]
+"""
+        response = self.call_llm(prompt, host=host)
+
+        # Strip accidental markdown fences before parsing
+        response = re.sub(r"```(?:json)?|```", "", response).strip()
+
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"PUBLIC_COMMENT": []}
+
+    def call_llm(self, prompt: str, host: str) -> str:
+        client = OpenAI(api_key="EMPTY", base_url=host)
+
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=512,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    def run_task(self, fw_spec):
+
+        debug = fw_spec.get("debug", False)
+
+        import socket
+        llm_host = f"http://{socket.gethostname()}:8000/v1"
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # Load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = self.s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            result = self.ask_ai_func_quotes(raw_text=text, host=llm_host)
+
+            results[doc_id] = {
+                "doc_id": doc_id,
+                "PUBLIC_COMMENT": result.get("PUBLIC_COMMENT", []),  # RESPONSE MUST HAVE "PUBLIC_COMMENT"
+            }
+
+        # Save
+        if debug:
+            local_path = Path.cwd() / "overall_quotes.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved quotes to {local_path}")
+            return FWAction(update_spec={"metadata_path": str(local_path)})
+        else:
+            self.s3_write_json(output_path, results)
+            return FWAction(update_spec={"metadata_path": output_path})
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# Context
+# ---------------------------------------------------------------------------
+
+class Context(FireTaskBase):
+    _fw_name = "Context"
+    path: str
+
+    @staticmethod
+    def s3_read_json(s3_path: str) -> dict:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read().decode("utf-8"))
+
+    @staticmethod
+    def s3_write_json(s3_path: str, data: dict) -> None:
+        match = re.match(r"^s3a?://([^/]+)/(.+)$", s3_path)
+        bucket, key = match.group(1), match.group(2)
+        boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+
+    def ask_ai_func_context(self, raw_text="", host=None):
+        max_chars = 24000  # 6k tokens (ok for gemma 27b, maybe don't use a smaller model)
+        was_truncated = False
+
+        if len(raw_text) > max_chars:
+            # Trying to take beginning and end, probably ok for prototype, maybe use chunked map reduce later
+            chunk = raw_text[:max_chars // 2] + "\n...[middle truncated]...\n" + raw_text[-(max_chars // 2):]
+            was_truncated = True
+        else:
+            chunk = raw_text
+
+        prompt = f"""
+Document text:
+{" ".join(chunk.split())}
+
+Task: Context
+Please give a short explanation of context and outcome of this event. You can use outside knowledge for this question.
+Explain if the project was excecuted, if it was cancelled, if it is still in progress, or if the outcome is unclear, and why.
+If the document is too vague to determine an outcome, return null.
+
+Please also include a 1 or 0 if the project happened or didn't happen. If you're unsure, return null.
+
+No follow up questions, just return a dictionary in this exact format:
+{{"context": "your summary here",
+"outcome": 0}}
+
+"""
+        response = self.call_llm(prompt, host=host)
+
+        # Strip accidental markdown fences before parsing
+        response = re.sub(r"```(?:json)?|```", "", response).strip()
+
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"context": "", "outcome": None}
+
+    def call_llm(self, prompt: str, host: str) -> str:
+        client = OpenAI(api_key="EMPTY", base_url=host)
+
+        response = client.chat.completions.create(
+            model="google/gemma-3-27b-it",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=512,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    def run_task(self, fw_spec):
+
+        debug = fw_spec.get("debug", False)
+
+        import socket
+        llm_host = f"http://{socket.gethostname()}:8000/v1"
+
+        docs_path   = fw_spec["docs_path"]
+        output_path = fw_spec["output_path"]
+
+        # Load docs
+        if debug:
+            with open(docs_path, "r", encoding="utf-8") as f:
+                docs_dict = json.load(f)
+        else:
+            docs_dict = self.s3_read_json(docs_path)
+
+        results = {}
+        for doc_id, text in docs_dict.items():
+            result = self.ask_ai_func_context(raw_text=text, host=llm_host)
+
+            results[doc_id] = {
+                "doc_id": doc_id,
+                "context": result.get("context", ""),
+                "outcome": result.get("outcome", None),
+            }
+
+        # Save
+        if debug:
+            local_path = Path.cwd() / "overall_context.json"
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"  [DEBUG] Saved context to {local_path}")
             return FWAction(update_spec={"metadata_path": str(local_path)})
         else:
             self.s3_write_json(output_path, results)
