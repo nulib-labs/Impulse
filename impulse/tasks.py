@@ -16,6 +16,7 @@ from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
 import base64
 import fitz
+
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
 collection = db["pages"]
@@ -706,6 +707,7 @@ class ExtractMetadata(FireTaskBase):
     @staticmethod
     def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
         import spacy
+
         nlp = spacy.load("en_core_web_sm")
         doc = nlp(text)
         gpes, people = [], []
@@ -717,7 +719,13 @@ class ExtractMetadata(FireTaskBase):
         return list(dict.fromkeys(gpes)), list(dict.fromkeys(people))
 
     @staticmethod
-    def ask_ai(gpes: list[str], people: list[str], document_text=None, pdf_bytes=None, image_bytes=None):
+    def ask_ai(
+        gpes: list[str],
+        people: list[str],
+        document_text=None,
+        pdf_bytes=None,
+        image_bytes=None,
+    ):
         from ollama import chat
 
         prompt = f"""
@@ -778,14 +786,20 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
             pdf_bytes = self._load_bytes(document)
             try:
                 import pdfminer.high_level as pdfminer
+
                 plain_text = pdfminer.extract_text(BytesIO(pdf_bytes))
             except Exception:
                 plain_text = ""
-            gpes, people = self.extract_spacy_entities(plain_text) if plain_text else ([], [])
+            gpes, people = (
+                self.extract_spacy_entities(plain_text) if plain_text else ([], [])
+            )
             metadata = self.ask_ai(gpes=gpes, people=people, pdf_bytes=pdf_bytes)
 
         # Case 2: Image file
-        elif isinstance(document, str) and os.path.splitext(document)[1].lower() in self.IMAGE_EXTENSIONS:
+        elif (
+            isinstance(document, str)
+            and os.path.splitext(document)[1].lower() in self.IMAGE_EXTENSIONS
+        ):
             image_bytes = self._load_bytes(document)
             metadata = self.ask_ai(gpes=[], people=[], image_bytes=image_bytes)
 
@@ -845,6 +859,7 @@ class SummariesTask(FireTaskBase):
     @staticmethod
     def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
         from ollama import chat
+
         prompt = """
         Provide a short summary of the document.
         Do not return anything except plain text summary.
@@ -878,7 +893,9 @@ class SummariesTask(FireTaskBase):
 
         # Case 1: S3 or local file path
         if isinstance(document, str) and (
-            document.startswith("s3://") or document.startswith("s3a://") or "/" in document
+            document.startswith("s3://")
+            or document.startswith("s3a://")
+            or "/" in document
         ):
             ext = os.path.splitext(document)[1].lower()
 
