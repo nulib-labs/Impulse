@@ -16,6 +16,8 @@ from pathlib import Path
 from impulse.auxiliary import convert_mets_to_yml
 import base64
 import fitz
+import spacy
+
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
 collection = db["pages"]
@@ -681,31 +683,10 @@ class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        path = re.sub(r"^s3a?://", "", s3_path)
-        parts = path.split("/", 1)
-        return parts[0], parts[1] if len(parts) > 1 else ""
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        bucket, key = self.parse_s3_path(s3_path)
-        buffer = BytesIO()
-        boto3.client("s3").download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-        return buffer.read()
-
-    @staticmethod
-    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        return [
-            base64.b64encode(page.get_pixmap(dpi=150).tobytes("png")).decode("utf-8")
-            for page in doc
-        ]
-
+    
+    
     @staticmethod
     def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
-        import spacy
         nlp = spacy.load("en_core_web_sm")
         doc = nlp(text)
         gpes, people = [], []
@@ -914,3 +895,10 @@ class SummariesTask(FireTaskBase):
 
         print(summary)
         return FWAction(update_spec={"document_summary": summary})
+
+class TranscriptionTask(FireTaskBase):
+    _fw_name = "Transcription Task"
+    path_array: list[str]
+    
+    def run_task(self, fw_spec):
+        pass

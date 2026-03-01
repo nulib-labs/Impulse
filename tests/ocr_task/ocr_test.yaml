@@ -5,7 +5,7 @@ fws:
     spec:
       _tasks:
         - _fw_name: Extract Metadata
-      input_text: |
+      document: |
         Hello, my name is Aerith Netzer I am a librarian at Northwestern University.
 links: []
 metadata: {}

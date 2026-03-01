@@ -3,7 +3,7 @@ fws:
   - fw_id: 1
     name: "Extract Metadata"
     spec:
-      document: s3://nu-impulse-production/P0491_35556036555423/main.pdf
+      accession_number: p1074_35556032756942
       _tasks:
         - _fw_name: "Extract Metadata"
 links: []
