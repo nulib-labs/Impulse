@@ -819,7 +819,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
 
         if document_text:
             message["content"] += f"\n\nDocument text:\n{document_text}"
-        response = chat(model="gemma3:4b", messages=[message], stream=False)
+        response = chat(model="gemma3:27b", messages=[message], stream=False)
         print(response['message']['content'])
 # or access fields directly from the response object
         return response.message.content
