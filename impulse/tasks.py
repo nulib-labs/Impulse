@@ -939,7 +939,7 @@ class SummariesTask(FireTaskBase):
             message["content"] += f"\n\n{document_text}"
 
         response = chat(
-            model="gemma3:4b",
+            model="gemma3:27b",
             messages=[message],
         )
         return response.message.content
