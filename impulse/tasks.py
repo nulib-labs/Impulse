@@ -18,7 +18,7 @@ import base64
 import fitz
 import spacy
 
-client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"))
+client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"), tls=True, tlsCAFile = certifi.where() )
 db = client["praxis"]
 pages_collection = db["pages"]
 summaries_collection = db["summaries"]
