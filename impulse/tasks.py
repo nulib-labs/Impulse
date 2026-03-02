@@ -875,6 +875,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
         else:
             raise ValueError(f"Unsupported document type: {type(document)}")
         document = self.extract_valid_json(metadata if metadata else "")
+        document["accession_number"] = accession_number
         self.save_to_mongo(document=document, collection=metadata_collection)
         return FWAction(update_spec={"document_metadata": document})
 
