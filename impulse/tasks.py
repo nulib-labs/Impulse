@@ -18,7 +18,7 @@ import base64
 import fitz
 import spacy
 
-client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
+client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"))
 db = client["praxis"]
 pages_collection = db["pages"]
 summaries_collection = db["summaries"]
@@ -832,10 +832,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
             return f.read()
 
     def save_to_mongo(self, document, collection):
-        """Save any Pydantic model to MongoDB."""
-
-        for page in document:
-            collection.insert_one(page.dict())
+        collection.insert_one(document)
         return True
     
     def run_task(self, fw_spec: dict):
