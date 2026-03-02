@@ -20,8 +20,9 @@ import spacy
 
 client = MongoClient("MONGODB_OCR_DEVELOPMENT_CONN_STRING")
 db = client["praxis"]
-collection = db["pages"]
-
+pages_collection = db["pages"]
+summaries_collection = db["summaries"]
+metadata_collection = db["metadata"]
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
     port=27017,
@@ -684,7 +685,81 @@ class ExtractMetadata(FireTaskBase):
 
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     
+    @staticmethod
+    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
+        """Convert each PDF page to a base64-encoded PNG string."""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+            images.append(img_b64)
+        return images
     
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        """
+        Parse S3 path into bucket and key.
+
+        Args:
+            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+        Returns:
+            Tuple of (bucket, key)
+        """
+        # Remove s3:// or s3a:// prefix
+        path = re.sub(r"^s3a?://", "", s3_path)
+        # Split into bucket and key
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+    
+    def get_s3_content(self, s3_path: str) -> bytes:
+        """
+        Retrieve content from S3.
+
+        Args:
+            s3_path: S3 URI
+
+        Returns:
+            File content as bytes
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # Download file content
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+
+        return buffer.read()
+
+    @staticmethod
+    def extract_valid_json(content: str) -> dict:
+        """Strip non-JSON content and parse the first valid JSON object found."""
+        # Remove markdown fences if present
+        content = re.sub(r'```(?:json)?\s*', '', content).strip()
+        
+        # Try parsing directly first
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+        
+        # Find the first { ... } block
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        
+        # Return safe default if nothing works
+        return {"main_place": None, "key_people": []}
+
     @staticmethod
     def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
         import spacy
@@ -744,12 +819,10 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
 
         if document_text:
             message["content"] += f"\n\nDocument text:\n{document_text}"
-
-        content = ""
-        for chunk in chat(model="gemma3:4b", messages=[message], stream=True):
-            if chunk.message.content:
-                content += chunk.message.content
-        return content
+        response = chat(model="gemma3:4b", messages=[message], stream=False)
+        print(response['message']['content'])
+# or access fields directly from the response object
+        return response.message.content
 
     def _load_bytes(self, document: str) -> bytes:
         if document.startswith(("s3://", "s3a://")):
@@ -758,9 +831,18 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
         with open(document, "rb") as f:
             return f.read()
 
-    def run_task(self, fw_spec):
-        document = fw_spec["document"]
+    def save_to_mongo(self, document, collection):
+        """Save any Pydantic model to MongoDB."""
 
+        for page in document:
+            collection.insert_one(page.dict())
+        return True
+    
+    def run_task(self, fw_spec: dict):
+        document = fw_spec["document"]
+        accession_number: str | None = fw_spec.get("accession_number", None)
+        if not accession_number:
+            raise KeyError(f"Accession number not in spec!")
         # Case 1: PDF
         if isinstance(document, str) and document.lower().endswith(".pdf"):
             pdf_bytes = self._load_bytes(document)
@@ -789,17 +871,15 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
             combined = "\n".join(parts)
             gpes, people = self.extract_spacy_entities(combined)
             metadata = self.ask_ai(gpes=gpes, people=people, document_text=combined)
-
         # Case 4: Raw string text
         elif isinstance(document, str):
             gpes, people = self.extract_spacy_entities(document)
             metadata = self.ask_ai(gpes=gpes, people=people, document_text=document)
-
         else:
             raise ValueError(f"Unsupported document type: {type(document)}")
-
-        print(metadata)
-        return FWAction(update_spec={"document_metadata": metadata})
+        document = self.extract_valid_json(metadata if metadata else "")
+        self.save_to_mongo(document=document, collection=metadata_collection)
+        return FWAction(update_spec={"document_metadata": document})
 
 
 class SummariesTask(FireTaskBase):
