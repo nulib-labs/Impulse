@@ -1,4 +1,3 @@
-import io
 from typing import override
 import re
 import certifi
