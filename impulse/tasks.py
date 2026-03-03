@@ -1,5 +1,5 @@
 import io
-from typing import NoReturn, override
+from typing import override
 import re
 import certifi
 import boto3
@@ -9,11 +9,7 @@ from loguru import logger
 from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
-from numpy.strings import strip
 from pymongo import MongoClient
-import json
-from pathlib import Path
-from impulse.auxiliary import convert_mets_to_yml
 import base64
 import fitz
 import spacy
