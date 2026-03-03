@@ -12,13 +12,12 @@ from uuid import uuid4
 from pymongo import MongoClient
 import base64
 import fitz
-import spacy
 
-client = MongoClient(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"), tls=True, tlsCAFile = certifi.where() )
-db = client["praxis"]
-pages_collection = db["pages"]
-summaries_collection = db["summaries"]
-metadata_collection = db["metadata"]
+client = MongoClient(
+    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
+    tls=True,
+    tlsCAFile=certifi.where(),
+)
 fp = FilePad(
     host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
     port=27017,
@@ -26,6 +25,10 @@ fp = FilePad(
     uri_mode=True,
     mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
 )
+db = client["praxis"]
+pages_collection = db["pages"]
+summaries_collection = db["summaries"]
+metadata_collection = db["metadata"]
 
 
 class BinarizationTask(FireTaskBase):
@@ -200,27 +203,18 @@ class DocumentExtractionTask(FireTaskBase):
         return None
 
     def _predict(self, contents):
-        from marker.converters.pdf import PdfConverter
-        from marker.models import create_model_dict
-        from marker.config.parser import ConfigParser
+        from chandra.model import InferenceManager
+        from chandra.input import load_pdf_images
 
-        config = {"output_format": "json"}
-        config_parser = ConfigParser(config)
-
-        converter = PdfConverter(
-            config=config_parser.generate_config_dict(),
-            artifact_dict=create_model_dict(),
-            processor_list=config_parser.get_processors(),
-            renderer=config_parser.get_renderer(),
-            llm_service=config_parser.get_llm_service(),
-        )
-
+        manager = InferenceManager(method="hf")
         if self.filetype(contents) != "pdf":
             contents = self.load_jp2(contents)
+            results = manager.generate(contents)
+            return results
         else:
-            contents: BytesIO = io.BytesIO(contents)
-        rendered = converter(contents)
-        return rendered
+            images = load_pdf_images(contents)
+            results = manager.generate(images)
+            return results
 
     @staticmethod
     def get_filepad_contents(gfs_id):
@@ -492,6 +486,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         args[2] = accession_number
         """
         from lxml import etree as ET
+
         s3_key = args[0]
         filename = args[1]
         accession_number = args[2]
@@ -680,7 +675,7 @@ class ExtractMetadata(FireTaskBase):
     _fw_name = "Extract Metadata"
 
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-    
+
     @staticmethod
     def pdf_to_images(pdf_bytes: bytes) -> list[str]:
         """Convert each PDF page to a base64-encoded PNG string."""
@@ -691,7 +686,7 @@ class ExtractMetadata(FireTaskBase):
             img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
             images.append(img_b64)
         return images
-    
+
     @staticmethod
     def parse_s3_path(s3_path: str) -> tuple[str, str]:
         """
@@ -710,7 +705,7 @@ class ExtractMetadata(FireTaskBase):
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
-    
+
     def get_s3_content(self, s3_path: str) -> bytes:
         """
         Retrieve content from S3.
@@ -737,28 +732,29 @@ class ExtractMetadata(FireTaskBase):
     def extract_valid_json(content: str) -> dict:
         """Strip non-JSON content and parse the first valid JSON object found."""
         # Remove markdown fences if present
-        content = re.sub(r'```(?:json)?\s*', '', content).strip()
-        
+        content = re.sub(r"```(?:json)?\s*", "", content).strip()
+
         # Try parsing directly first
         try:
             return json.loads(content)
         except json.JSONDecodeError:
             pass
-        
+
         # Find the first { ... } block
-        match = re.search(r'\{.*\}', content, re.DOTALL)
+        match = re.search(r"\{.*\}", content, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group())
             except json.JSONDecodeError:
                 pass
-        
+
         # Return safe default if nothing works
         return {"main_place": None, "key_people": []}
 
     @staticmethod
     def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
         import spacy
+
         nlp = spacy.load("en_core_web_sm")
         doc = nlp(text)
         gpes, people = [], []
@@ -816,8 +812,8 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
         if document_text:
             message["content"] += f"\n\nDocument text:\n{document_text}"
         response = chat(model="gemma3:27b", messages=[message], stream=False)
-        print(response['message']['content'])
-# or access fields directly from the response object
+        print(response["message"]["content"])
+        # or access fields directly from the response object
         return response.message.content
 
     def _load_bytes(self, document: str) -> bytes:
@@ -830,7 +826,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
     def save_to_mongo(self, document, collection):
         collection.insert_one(document)
         return True
-    
+
     def run_task(self, fw_spec: dict):
         document = fw_spec["document"]
         accession_number: str | None = fw_spec.get("accession_number", None)
@@ -986,9 +982,10 @@ class SummariesTask(FireTaskBase):
         print(summary)
         return FWAction(update_spec={"document_summary": summary})
 
+
 class TranscriptionTask(FireTaskBase):
     _fw_name = "Transcription Task"
     path_array: list[str]
-    
+
     def run_task(self, fw_spec):
         pass
