@@ -204,11 +204,17 @@ class DocumentExtractionTask(FireTaskBase):
 
     def _predict(self, contents):
         from chandra.model import InferenceManager
-        from chandra.input import load_pdf_images
+        from chandra.input import load_pdf_images, load_image
+        from chandra.model.schema import BatchInputItem
 
         manager = InferenceManager(method="hf")
         if self.filetype(contents) != "pdf":
             contents = self.load_jp2(contents)
+            contents = [
+                BatchInputItem(
+                    image=contents, prompt="Extract the text from this document"
+                )
+            ]
             results = manager.generate(contents)
             return results
         else:
@@ -296,9 +302,7 @@ class DocumentExtractionTask(FireTaskBase):
         arr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR_RGB)
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        img_byte_arr = io.BytesIO()
-        img.save(img_byte_arr, format="PNG")
-        return img_byte_arr
+        return img
 
     def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
