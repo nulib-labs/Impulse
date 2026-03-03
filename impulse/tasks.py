@@ -333,7 +333,7 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=collection)
+                self.save_to_mongo(model=predictions, collection=pages_collection)
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
