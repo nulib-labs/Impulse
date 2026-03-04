@@ -764,54 +764,42 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
                 elif parent_label == "Title":
                     label = "TITLE"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
                 elif parent_label == "Contents":
                     label = "TABLE_OF_CONTENTS"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
                 elif parent_label == "Preface":
                     label = "PREFACE"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
                 elif parent_label.startswith("Chapter") or parent_label == "Appendix":
                     label = "CHAPTER_START"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
                 elif parent_label in ("Notes", "Bibliography"):
                     label = "REFERENCES"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
                 elif parent_label == "Index":
                     label = "INDEX"
                     line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{
-                            label
-                        }" }}'
+                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
                         if orderlabel
                         else f'{page_filename}: {{ label: "{label}" }}'
                     )
