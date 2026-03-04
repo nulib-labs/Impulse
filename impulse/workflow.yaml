@@ -136,3 +136,7 @@ links:
   7: [9]
   8: [9]
   9: [10]
+
+metadata:
+  name: EIS Enrichment Pipeline
+  created: "2026-03-03"
