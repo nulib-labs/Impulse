@@ -1,1 +1,1 @@
-from tasks import tasks
+from tasks.my_tasks import BenchmarkNetworkingTask
