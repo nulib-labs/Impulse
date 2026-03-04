@@ -30,9 +30,8 @@ summaries_collection = db["summaries"]
 metadata_collection = db["metadata"]
 
 
-class BinarizationTask(FireTaskBase):
-    _fw_name = "Binarization Task"
-    output_path: str | None
+class ImageProcessingTask(FireTaskBase):
+    _fw_name = "Image Processing Task"
 
     @staticmethod
     def _save_content(output_path, content):
@@ -111,33 +110,68 @@ class BinarizationTask(FireTaskBase):
 
         return buffer.read()
 
+    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
+        """
+        Save string content to S3.
+
+        Args:
+            s3_path: S3 URI (e.g. s3://bucket/key)
+            content: File content as a string
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        s3_client = boto3.client("s3")
+
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content,  # Encode string as bytes
+        )
+
+        return True
+
+    def validate_input(input_data: dict):
+        pass
+
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
-        This method runs the binarization task.
-        This task takes one spec entry: `path` of type `str`
+        This method runs the image processing task.
         """
-        path_array_key = fw_spec["find_path_array_in"]
-        path_array: str = fw_spec[path_array_key]
-        binarized_objects: list[tuple[str, str]]
-        binarized_objects = []
+        path_array_key = fw_spec.get("find_path_array_in", None)
+        if not path_array_key:
+            logger.critical("Critical spec keys missing. Abandoning.")
+            raise KeyError(f"Find path array not in spec!")
+
+        path_array: str = fw_spec.get(path_array_key, None)
+        
+        if not path_array_key:
+            logger.critical("Critical spec keys missing. Abandoning.")
+            raise KeyError(f"{path_array_key} not in spec!")
+        
+        impulse_identifier = fw_spec.get(
+            "impulse_identifier", None
+        )  # The impulse identifier can be anything that would be a valid directory name in S3
+        impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
+        binarized_objects: list[tuple[str, str]] = []
+
         for path in path_array:
             logger.info(f"`path` is {path}")
             if self.is_s3_path(path):
-                logger.info("Now loading content from S3")
+                logger.info
+                filestem = path.split("/")[-1]
                 content = self.get_s3_content(path)
                 binarized = self._binarize(content)
+
+                output_s3_path = "/".join(["nu-impulse-production", "DATA", impulse_identifier, filestem])
+
+                self.save_to_s3("".join(["s3://", output_s3_path]), binarized)
             else:
                 with open(path, "rb") as f:
                     content = f.read()
                 binarized = self._binarize(content)
-            id, identifier = fp.add_contents(
-                binarized, identifier=f"impulse:binarized:{path}:{uuid4()}"
-            )
-            binarized_objects.append((id, identifier))
 
-        # Returns a FW Action that is appending all objects to the spec key `binarized_objects`
-        return FWAction(update_spec={"binarized_objects": binarized_objects})
+        return FWAction()
 
 
 class DocumentExtractionTask(FireTaskBase):
@@ -733,6 +767,8 @@ class ExtractMetadata(FireTaskBase):
 
     @staticmethod
     def extract_valid_json(content: str) -> dict:
+        import json
+
         """Strip non-JSON content and parse the first valid JSON object found."""
         # Remove markdown fences if present
         content = re.sub(r"```(?:json)?\s*", "", content).strip()
@@ -986,9 +1022,74 @@ class SummariesTask(FireTaskBase):
         return FWAction(update_spec={"document_summary": summary})
 
 
-class TranscriptionTask(FireTaskBase):
-    _fw_name = "Transcription Task"
-    path_array: list[str]
+class GeocodeTask(FireTaskBase):
+    """
+    Geocode each document's main_place using Nominatim (OpenStreetMap).
+    Adds lat/lon coordinates to the metadata results.
+    Rate-limited to 1 request/second per Nominatim's usage policy.
 
-    def run_task(self, fw_spec):
-        pass
+    fw_spec keys:
+      metadata_path — S3 path to GetMetadataTask output
+      output_path   — S3 path to write geocoded results JSON
+      debug         — if True, read/write local files
+    """
+
+    _fw_name = "Geocode Task"
+
+    @staticmethod
+    def _geocode(place: str) -> dict | None:
+        """Call Nominatim and return {lat, lon, display_name} or None."""
+        import requests
+
+        if not place:
+            return None
+
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": place,
+            "format": "json",
+            "limit": 1,
+            "addressdetails": 1,
+        }
+        headers = {"User-Agent": NOMINATIM_UA}
+
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            resp.raise_for_status()
+            results = resp.json()
+            if results:
+                r = results[0]
+                return {
+                    "lat": float(r["lat"]),
+                    "lon": float(r["lon"]),
+                    "display_name": r.get("display_name", place),
+                }
+        except Exception as e:
+            logger.warning(f"Geocode failed for '{place}': {e}")
+        return None
+
+
+class ExperimentalMetadataTask(FireTaskBase):
+    """
+    Pulls all pages of a document from MongoDB document.
+    Concatenates all text together.
+    Runs bert-base-NER on the text together.
+    Puts the data into nlp[works] coll
+
+    """
+
+    _fw_name = "Experimental Metadata Task"
+
+    @override
+    def run_task(self, fw_spec: dict) -> FWAction:
+        from transformers import AutoTokenizer, AutoModelForTokenClassification
+        from transformers import pipeline
+
+        tokenizer = AutoTokenizer.from_pretrained("dslim/bert-base-NER")
+        model = AutoModelForTokenClassification.from_pretrained("dslim/bert-base-NER")
+
+        nlp = pipeline("ner", model=model, tokenizer=tokenizer)
+        example = "My name is Wolfgang and I live in Berlin"
+
+        ner_results = nlp(example)
+        print(ner_results)

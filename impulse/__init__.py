@@ -1,7 +1,1 @@
-from tasks import (
-    DocumentExtractionTask,
-    BinarizationTask,
-    TextExtractionTask,
-    METSXMLToHathiTrustManifestTask,
-    ExtractMetadata,
-)
+from impulse import tasks, experimental_tasks
