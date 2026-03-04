@@ -13,26 +13,29 @@ import base64
 import fitz
 import time
 
-client = MongoClient(
-    os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
-    tls=True,
-    tlsCAFile=certifi.where(),
-)
-fp = FilePad(
-    host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
-    port=27017,
-    name="fireworks",
-    uri_mode=True,
-    mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
-)
-db = client["praxis"]
-pages_collection = db["pages"]
-summaries_collection = db["summaries"]
-metadata_collection = db["metadata"]
+
+def _get_db():
+    client = MongoClient(
+        os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
+        tls=True,
+        tlsCAFile=certifi.where(),
+    )
+    fp = FilePad(
+        host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
+        port=27017,
+        name="fireworks",
+        uri_mode=True,
+        mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
+    )
+    db = client["praxis"]
+    pages_collection = db["pages"]
+    summaries_collection = db["summaries"]
+    metadata_collection = db["metadata"]
+    return db
 
 
 class BenchmarkNetworkingTask(FireTaskBase):
-    _fw_name = "Benchmarck Networking"
+    _fw_name = "Benchmark Networking"
 
     @staticmethod
     def _save_content(output_path, content):
@@ -397,12 +400,6 @@ class DocumentExtractionTask(FireTaskBase):
             return results
 
     @staticmethod
-    def get_filepad_contents(gfs_id):
-        contents, doc = fp.get_file(gfs_id)
-        logger.info(f"Type of contents: {type(contents)}")
-        return contents
-
-    @staticmethod
     def is_s3_path(path: str) -> bool:
         """
         Check if the path is an S3 URI.
@@ -463,10 +460,6 @@ class DocumentExtractionTask(FireTaskBase):
             return False
 
     @staticmethod
-    def get_file_from_filepad(identifier):
-        return fp
-
-    @staticmethod
     def load_jp2(contents: bytes):
         import numpy as np
         import cv2
@@ -501,13 +494,13 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = self.get_s3_content(path)
                 predictions = self._predict(content)
-                self.save_to_mongo(predictions, collection=pages_collection)
+                self.save_to_mongo(predictions, collection=_get_db()["pages"])
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=pages_collection)
+                self.save_to_mongo(model=predictions, collection=_get_db()["pages"])
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
@@ -1048,7 +1041,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
             raise ValueError(f"Unsupported document type: {type(document)}")
         document = self.extract_valid_json(metadata if metadata else "")
         document["accession_number"] = accession_number
-        self.save_to_mongo(document=document, collection=metadata_collection)
+        self.save_to_mongo(document=document, collection=_get_db()["metadata"])
         return FWAction(update_spec={"document_metadata": document})
 
 
