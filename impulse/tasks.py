@@ -11,6 +11,7 @@ from uuid import uuid4
 from pymongo import MongoClient
 import base64
 import fitz
+import time
 
 client = MongoClient(
     os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
@@ -28,6 +29,144 @@ db = client["praxis"]
 pages_collection = db["pages"]
 summaries_collection = db["summaries"]
 metadata_collection = db["metadata"]
+
+
+class BenchmarkNetworkingTask(FireTaskBase):
+    _fw_name = "Benchmarck Networking"
+
+    @staticmethod
+    def _save_content(output_path, content):
+        import cv2
+
+        _ = cv2.imwrite(output_path, content)
+        pass
+
+    @staticmethod
+    def _binarize(content: bytes) -> bytes:
+        import cv2
+        import numpy as np
+
+        arr = np.frombuffer(content, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise ValueError("Failed to decode image.")
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        success, encoded = cv2.imencode(".png", binary)
+        if not success:
+            raise ValueError("Failed to encode binarized image.")
+
+        return encoded.tobytes()
+
+    @staticmethod
+    def is_s3_path(path: str) -> bool:
+        """
+        Check if the path is an S3 URI.
+        Supports both s3:// and s3a:// formats.
+        """
+        return bool(re.match(r"^s3a?://", path))
+
+    @staticmethod
+    def parse_s3_path(s3_path: str) -> tuple[str, str]:
+        """
+        Parse S3 path into bucket and key.
+
+        Args:
+            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+        Returns:
+            Tuple of (bucket, key)
+        """
+        # Remove s3:// or s3a:// prefix
+        path = re.sub(r"^s3a?://", "", s3_path)
+        # Split into bucket and key
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return bucket, key
+
+    def get_s3_content(self, s3_path: str) -> bytes:
+        """
+        Retrieve content from S3.
+
+        Args:
+            s3_path: S3 URI
+
+        Returns:
+            File content as bytes
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # Download file content
+        buffer = BytesIO()
+        s3_client.download_fileobj(bucket, key, buffer)
+        buffer.seek(0)
+
+        return buffer.read()
+
+    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
+        """
+        Save string content to S3.
+
+        Args:
+            s3_path: S3 URI (e.g. s3://bucket/key)
+            content: File content as a string
+        """
+        bucket, key = self.parse_s3_path(s3_path)
+
+        s3_client = boto3.client("s3")
+
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content,  # Encode string as bytes
+        )
+
+        return True
+
+    def validate_input(input_data: dict):
+        pass
+
+    @override
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        """
+        This method runs the image processing task.
+        """
+        path_array_key = fw_spec.get("find_path_array_in", None)
+        if not path_array_key:
+            logger.critical("Critical spec keys missing. Abandoning.")
+            raise KeyError(f"Find path array not in spec!")
+
+        path_array: str = fw_spec.get(path_array_key, None)
+
+        if not path_array_key:
+            logger.critical("Critical spec keys missing. Abandoning.")
+            raise KeyError(f"{path_array_key} not in spec!")
+
+        impulse_identifier = fw_spec.get(
+            "impulse_identifier", None
+        )  # The impulse identifier can be anything that would be a valid directory name in S3
+        impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
+        binarized_objects: list[tuple[str, str]] = []
+
+        for path in path_array:
+            logger.info(f"`path` is {path}")
+            if self.is_s3_path(path):
+                filestem = path.split("/")[-1]
+
+                start_time = time.time()
+                content = self.get_s3_content(path)
+                elapsed = time.time() - start_time
+                logger.info(f"Fetched S3 content for `{filestem}` in {elapsed:.3f}s")
+
+        return FWAction()
 
 
 class ImageProcessingTask(FireTaskBase):
@@ -144,11 +283,11 @@ class ImageProcessingTask(FireTaskBase):
             raise KeyError(f"Find path array not in spec!")
 
         path_array: str = fw_spec.get(path_array_key, None)
-        
+
         if not path_array_key:
             logger.critical("Critical spec keys missing. Abandoning.")
             raise KeyError(f"{path_array_key} not in spec!")
-        
+
         impulse_identifier = fw_spec.get(
             "impulse_identifier", None
         )  # The impulse identifier can be anything that would be a valid directory name in S3
@@ -163,7 +302,9 @@ class ImageProcessingTask(FireTaskBase):
                 content = self.get_s3_content(path)
                 binarized = self._binarize(content)
 
-                output_s3_path = "/".join(["nu-impulse-production", "DATA", impulse_identifier, filestem])
+                output_s3_path = "/".join(
+                    ["nu-impulse-production", "DATA", impulse_identifier, filestem]
+                )
 
                 self.save_to_s3("".join(["s3://", output_s3_path]), binarized)
             else:
