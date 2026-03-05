@@ -279,7 +279,7 @@ class ImageProcessingTask(FireTaskBase):
             if self.is_s3_path(path):
                 logger.info
                 filestem = path.split("/")[-1]
-                content = self.get_s3_content(path)
+                content = get_s3_content(path)
                 binarized = self._binarize(content)
 
                 output_s3_path = "/".join(
@@ -447,7 +447,7 @@ class DocumentExtractionTask(FireTaskBase):
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
-                content = self.get_s3_content(path)
+                content = get_s3_content(path)
                 predictions = self._predict(content)
                 self.save_to_mongo(predictions, collection=_get_db()["pages"])
                 logger.info(f"Predictions:\n{predictions}")
@@ -733,7 +733,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         logger.info("Now loading content from S3")
         input_path = fw_spec["input_path"]
         output_path = fw_spec["output_path"]
-        content = self.get_s3_content(input_path)
+        content = get_s3_content(input_path)
 
         yaml_content: str = self.convert_mets_to_yml(content)
         s3_path = self.save_to_s3(output_path, yaml_content)
@@ -869,7 +869,7 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
     def _load_bytes(self, document: str) -> bytes:
         if document.startswith(("s3://", "s3a://")):
             logger.info("Document starts with s3, pulling from bucket")
-            return self.get_s3_content(document)
+            return get_s3_content(document)
         with open(document, "rb") as f:
             return f.read()
 
@@ -993,7 +993,7 @@ class SummariesTask(FireTaskBase):
 
             if document.startswith(("s3://", "s3a://")):
                 print("Document starts with s3, pulling from bucket")
-                content_bytes = self.get_s3_content(document)
+                content_bytes = get_s3_content(document)
             else:
                 with open(document, "rb") as f:
                     content_bytes = f.read()
