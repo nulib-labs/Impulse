@@ -28,9 +28,6 @@ def _get_db():
         mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
     )
     db = client["praxis"]
-    pages_collection = db["pages"]
-    summaries_collection = db["summaries"]
-    metadata_collection = db["metadata"]
     return db
 
 
@@ -104,8 +101,8 @@ class BenchmarkNetworkingTask(FireTaskBase):
         """
         bucket, key = self.parse_s3_path(s3_path)
 
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
+        session = boto3.Session(profile_name="impulse")
+        s3_client = session.client("s3")
 
         # Download file content
         buffer = BytesIO()
