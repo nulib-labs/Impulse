@@ -262,7 +262,8 @@ class ImageProcessingTask(FireTaskBase):
         """
         bucket, key = self.parse_s3_path(s3_path)
 
-        s3_client = boto3.client("s3")
+        session = boto3.Session(profile_name="impulse")
+        s3_client = session.client("s3")
 
         s3_client.put_object(
             Bucket=bucket,
