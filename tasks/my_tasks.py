@@ -430,7 +430,8 @@ class DocumentExtractionTask(FireTaskBase):
     def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
 
-        collection.update_one(dataclasses.asdict(model))
+        for page in model:
+            collection.update_one(dataclasses.asdict(page))
         return True
 
     @override
