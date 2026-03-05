@@ -58,7 +58,7 @@ def get_s3_content(s3_path: str) -> bytes:
 
 def _get_db():
     client = MongoClient(
-        os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
+        os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"),
         tls=True,
         tlsCAFile=certifi.where(),
     )
@@ -1072,7 +1072,7 @@ class GeocodeTask(FireTaskBase):
         return None
 
 
-class ExperimentalMetadataTask(FireTaskBase):
+class NERTask(FireTaskBase):
     """
     Pulls all pages of a document from MongoDB document.
     Concatenates all text together.
@@ -1081,7 +1081,7 @@ class ExperimentalMetadataTask(FireTaskBase):
 
     """
 
-    _fw_name = "Experimental Metadata Task"
+    _fw_name = "NER Task"
 
     @override
     def run_task(self, fw_spec: dict) -> FWAction:
