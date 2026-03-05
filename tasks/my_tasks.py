@@ -1,4 +1,5 @@
 from typing import override
+import dataclass
 import re
 import certifi
 import boto3
@@ -430,7 +431,7 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
 
         for page in model:
-            collection.insert_one(page.model_dump())
+            collection.insert_one(dataclass.asdict(page))
         return True
 
     @override
