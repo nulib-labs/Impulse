@@ -239,13 +239,16 @@ class ImageProcessingTask(FireTaskBase):
         """
         bucket, key = self.parse_s3_path(s3_path)
 
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
+        logger.info(f"Bucket detected: {bucket}")
+        logger.info(f"Bucket detected: {key}")
+        import boto3
+        from io import BytesIO
 
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
+        session = boto3.Session(profile_name="impulse")
+        s3 = session.client("s3")
+
+        response = s3.get_object(Bucket=bucket, Key=key)
+        buffer = BytesIO(response["Body"].read())
 
         return buffer.read()
 
