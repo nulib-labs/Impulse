@@ -14,6 +14,48 @@ import fitz
 import time
 
 
+def parse_s3_path(s3_path: str) -> tuple[str, str]:
+    """
+    Parse S3 path into bucket and key.
+
+    Args:
+        s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
+
+    Returns:
+        Tuple of (bucket, key)
+    """
+    # Remove s3:// or s3a:// prefix
+    path = re.sub(r"^s3a?://", "", s3_path)
+    # Split into bucket and key
+    parts = path.split("/", 1)
+    bucket = parts[0]
+    key = parts[1] if len(parts) > 1 else ""
+    return bucket, key
+
+
+def get_s3_content(s3_path: str) -> bytes:
+    """
+    Retrieve content from S3.
+
+    Args:
+        s3_path: S3 URI
+
+    Returns:
+        File content as bytes
+    """
+    bucket, key = parse_s3_path(s3_path)
+
+    session = boto3.Session(profile_name="impulse")
+    s3_client = session.client("s3")
+
+    # Download file content
+    buffer = BytesIO()
+    s3_client.download_fileobj(bucket, key, buffer)
+    buffer.seek(0)
+
+    return buffer.read()
+
+
 def _get_db():
     client = MongoClient(
         os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING"),
@@ -70,47 +112,6 @@ class BenchmarkNetworkingTask(FireTaskBase):
         """
         return bool(re.match(r"^s3a?://", path))
 
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        session = boto3.Session(profile_name="impulse")
-        s3_client = session.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
-
     def save_to_s3(self, s3_path: str, content: bytes) -> bool:
         """
         Save string content to S3.
@@ -162,7 +163,7 @@ class BenchmarkNetworkingTask(FireTaskBase):
                 filestem = path.split("/")[-1]
 
                 start_time = time.time()
-                content = self.get_s3_content(path)
+                content = get_s3_content(path)
                 elapsed = time.time() - start_time
                 logger.info(f"Fetched S3 content for `{filestem}` in {elapsed:.3f}s")
 
@@ -226,31 +227,6 @@ class ImageProcessingTask(FireTaskBase):
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        logger.info(f"Bucket detected: {bucket}")
-        logger.info(f"Bucket detected: {key}")
-        import boto3
-        from io import BytesIO
-
-        session = boto3.Session(profile_name="impulse")
-        s3 = session.client("s3")
-
-        response = s3.get_object(Bucket=bucket, Key=key)
-        buffer = BytesIO(response["Body"].read())
-
-        return buffer.read()
 
     def save_to_s3(self, s3_path: str, content: bytes) -> bool:
         """
@@ -427,28 +403,6 @@ class DocumentExtractionTask(FireTaskBase):
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
 
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
-
     @staticmethod
     def is_impulse_identifier(value: str) -> bool:
         """
@@ -548,28 +502,6 @@ class TextExtractionTask(FireTaskBase):
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
 
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
-
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         return FWAction()
@@ -605,28 +537,6 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
 
     def save_to_s3(self, s3_path: str, content: str) -> str:
         """
@@ -866,28 +776,6 @@ class ExtractMetadata(FireTaskBase):
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
 
-    def get_s3_content(self, s3_path: str) -> bytes:
-        """
-        Retrieve content from S3.
-
-        Args:
-            s3_path: S3 URI
-
-        Returns:
-            File content as bytes
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        # Initialize S3 client
-        s3_client = boto3.client("s3")
-
-        # Download file content
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-
-        return buffer.read()
-
     @staticmethod
     def extract_valid_json(content: str) -> dict:
         import json
@@ -1044,14 +932,6 @@ class SummariesTask(FireTaskBase):
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
         return bucket, key
-
-    def get_s3_content(self, s3_path: str) -> bytes:
-        bucket, key = self.parse_s3_path(s3_path)
-        s3_client = boto3.client("s3")
-        buffer = BytesIO()
-        s3_client.download_fileobj(bucket, key, buffer)
-        buffer.seek(0)
-        return buffer.read()
 
     @staticmethod
     def pdf_to_images(pdf_bytes: bytes) -> list[str]:
