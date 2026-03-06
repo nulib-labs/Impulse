@@ -459,6 +459,8 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = get_s3_content(path)
                 predictions = self._predict(content)
+                predictions["filename"] = filename
+                predictions["impulse_identifier"] = fw_spec["impulse_identifier"]
                 self.save_to_mongo(
                     predictions,
                     collection=_get_db()["pages"],
