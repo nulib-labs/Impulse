@@ -427,11 +427,19 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, model, collection):
+    def save_to_mongo(self, model, collection, impulse_identifier, filename):
         """Save any Pydantic model to MongoDB."""
 
         for page in model:
-            collection.update_one(dataclasses.asdict(page))
+            page_dict = dataclasses.asdict(page)
+            collection.update_one(
+                {
+                    "filename": page_dict["filename"],
+                    "impulse_identifier": page_dict["impulse_identifier"],
+                },
+                {"$set": page_dict},
+                upsert=True,
+            )
         return True
 
     @override
@@ -441,16 +449,22 @@ class DocumentExtractionTask(FireTaskBase):
         This method looks for `path_array`.
         """
         find_path_array_in: list[str] = fw_spec["find_path_array_in"]
-        path_array: list[tuple(str, str)] = fw_spec[find_path_array_in]
+        path_array: list[str] = fw_spec[find_path_array_in]
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
         for path in path_array:
+            filename = path.split("/")[-1]
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
                 content = get_s3_content(path)
                 predictions = self._predict(content)
-                self.save_to_mongo(predictions, collection=_get_db()["pages"])
+                self.save_to_mongo(
+                    predictions,
+                    collection=_get_db()["pages"],
+                    impulse_identifier=fw_spec["impulse_identifier"],
+                    filename=filename,
+                )
                 logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
