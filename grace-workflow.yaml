@@ -1,0 +1,142 @@
+# workflow.yml
+# ------------
+# FireWorks workflow for enriching the Northwestern EIS IIIF collection.
+#
+# Usage:
+#   lpad add workflow.yml
+#   rlaunch rapidfire   (on the supercomputer, or qlaunch for queue submission)
+#
+# All S3 paths use your existing nu-impulse-production bucket convention.
+# Set llm_host in fw_spec to override the auto-detected hostname if needed.
+#
+# To run in debug mode (local files, no S3):
+#   Set debug: true and change all s3:// paths to local file paths.
+
+fws:
+  # ── Firework 1: Fetch IIIF Collection ─────────────────────────────────────
+  - fw_id: 1
+    name: Fetch IIIF Collection
+    spec:
+      _tasks:
+        - _fw_name: Fetch IIIF Collection Task
+      collection_url: "https://api.dc.library.northwestern.edu/api/v2/collections/f2fc1bd8-c37f-4486-b28a-509f0e0362e1?as=iiif"
+      output_path: "eis-enrichment/00_collection"
+
+  # ── Firework 2: OCR (existing DocumentExtractionTask) ─────────────────────
+  # Reads the collection, downloads images via IIIF Image API, runs Marker.
+  # Writes OCR text to MongoDB pipeline_store under key "eis-enrichment/ocr_output"
+  #   format: {"work-uuid": "full ocr text", ...}
+  - fw_id: 2
+    name: OCR — Marker
+    spec:
+      _tasks:
+        - _fw_name: Document Extraction Task
+      find_path_array_in: collection_path
+      docs_output_path: "eis-enrichment/ocr_output"
+
+  # ── Firework 2b: Aggregate OCR blocks into pipeline_store ─────────────────
+  - fw_id: 11
+    name: Aggregate OCR
+    spec:
+      _tasks:
+        - _fw_name: Aggregate OCR Task
+      output_path: "eis-enrichment/ocr_output"
+
+  # ── Firework 3: Get Metadata (place + people) ──────────────────────────────
+  - fw_id: 3
+    name: Get Metadata
+    spec:
+      _tasks:
+        - _fw_name: Get Metadata Task
+      docs_path: "eis-enrichment/ocr_output"
+      output_path: "eis-enrichment/01_metadata"
+
+  # ── Firework 4: Geocode ────────────────────────────────────────────────────
+  - fw_id: 4
+    name: Geocode
+    spec:
+      _tasks:
+        - _fw_name: Geocode Task
+      metadata_path: "eis-enrichment/01_metadata"
+      output_path: "eis-enrichment/02_geocoded_metadata"
+
+  # ── Firework 5: Summaries ──────────────────────────────────────────────────
+  - fw_id: 5
+    name: Summaries
+    spec:
+      _tasks:
+        - _fw_name: Summary Task
+      docs_path: "eis-enrichment/ocr_output"
+      output_path: "eis-enrichment/03_summaries"
+
+  # ── Firework 6: Themes ─────────────────────────────────────────────────────
+  - fw_id: 6
+    name: Themes
+    spec:
+      _tasks:
+        - _fw_name: Themes Enrichment Task
+      docs_path: "eis-enrichment/ocr_output"
+      output_path: "eis-enrichment/04_themes"
+
+  # ── Firework 7: Quotes ─────────────────────────────────────────────────────
+  - fw_id: 7
+    name: Quotes
+    spec:
+      _tasks:
+        - _fw_name: Quotes Enrichment Task
+      docs_path: "eis-enrichment/ocr_output"
+      output_path: "eis-enrichment/05_quotes"
+
+  # ── Firework 8: Context + Completed ───────────────────────────────────────
+  - fw_id: 8
+    name: Context and Completed
+    spec:
+      _tasks:
+        - _fw_name: Context Enrichment Task
+      docs_path: "eis-enrichment/ocr_output"
+      output_path: "eis-enrichment/06_context"
+
+  # ── Firework 9: Build Enriched Manifest ───────────────────────────────────
+  - fw_id: 9
+    name: Build Enriched Manifest
+    spec:
+      _tasks:
+        - _fw_name: Build Enriched Manifest Task
+      collection_path: "eis-enrichment/00_collection"
+      geocoded_metadata_path: "eis-enrichment/02_geocoded_metadata"
+      summaries_path: "eis-enrichment/03_summaries"
+      themes_path: "eis-enrichment/04_themes"
+      quotes_path: "eis-enrichment/05_quotes"
+      context_path: "eis-enrichment/06_context"
+      output_path: "eis-enrichment/07_enriched_manifest"
+      llm_model: "google/gemma-3-27b-it"
+
+  # ── Firework 10: Save to MongoDB ───────────────────────────────────────────
+  - fw_id: 10
+    name: Save to MongoDB
+    spec:
+      _tasks:
+        - _fw_name: Save Manifest To Mongo Task
+      enriched_manifest_path: "eis-enrichment/07_enriched_manifest"
+      collection_id: "f2fc1bd8-c37f-4486-b28a-509f0e0362e1"
+
+# ── Dependency graph ───────────────────────────────────────────────────────────
+# 1 (fetch) → 2 (ocr) → 11 (aggregate) → 3,5,6,7,8 (parallel enrichment)
+#                                          3 (metadata) → 4 (geocode)
+#                                          3,4,5,6,7,8 → 9 (merge) → 10 (save)
+
+links:
+  1: [2]
+  2: [11]
+  11: [3, 5, 6, 7, 8]
+  3: [4]
+  4: [9]
+  5: [9]
+  6: [9]
+  7: [9]
+  8: [9]
+  9: [10]
+
+metadata:
+  name: EIS Enrichment Pipeline
+  created: "2026-03-03"

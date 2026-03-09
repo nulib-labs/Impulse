@@ -364,7 +364,7 @@ class DocumentExtractionTask(FireTaskBase):
         manager = InferenceManager(method="hf")
         batch_input_items: list[BatchInputItem] = [
             BatchInputItem(
-                image=content,
+                image=load_image(content),
                 prompt="Extract the text from this document",
             )
             for content in contents
