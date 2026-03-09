@@ -464,7 +464,7 @@ class DocumentExtractionTask(FireTaskBase):
                 predictions = self._predict(content)
                 self.save_to_mongo(
                     predictions,
-                    collection=_get_db()["pages"],
+                    collection=_get_db()["colt"],
                     impulse_identifier=fw_spec["impulse_identifier"],
                     filename=filename,
                 )
