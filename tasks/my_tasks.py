@@ -196,7 +196,7 @@ class ImageProcessingTask(FireTaskBase):
 
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        success, encoded = cv2.imencode(".png", binary)
+        success, encoded = cv2.imencode(".jp2", binary)
         if not success:
             raise ValueError("Failed to encode binarized image.")
 
@@ -273,18 +273,17 @@ class ImageProcessingTask(FireTaskBase):
             "impulse_identifier", None
         )  # The impulse identifier can be anything that would be a valid directory name in S3
         impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
-        binarized_objects: list[tuple[str, str]] = []
+        output_paths: list[tuple[str, str]] = []
 
         for path in path_array:
             logger.info(f"`path` is {path}")
             if self.is_s3_path(path):
-                logger.info
                 filestem = path.split("/")[-1]
                 content = get_s3_content(path)
                 binarized = self._binarize(content)
 
                 output_s3_path = "/".join(
-                    ["nu-impulse-production", "DATA", impulse_identifier, filestem]
+                    ["nu-impulse-production", "DATA", str(impulse_identifier), filestem]
                 )
 
                 self.save_to_s3("".join(["s3://", output_s3_path]), binarized)
@@ -432,6 +431,8 @@ class DocumentExtractionTask(FireTaskBase):
 
         for page in model:
             page_dict = dataclasses.asdict(page)
+            page_dict["filename"] = filename
+            page_dict["impulse_identifier"] = impulse_identifier
             collection.update_one(
                 {
                     "filename": page_dict["filename"],
@@ -459,8 +460,6 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 content = get_s3_content(path)
                 predictions = self._predict(content)
-                predictions["filename"] = filename
-                predictions["impulse_identifier"] = fw_spec["impulse_identifier"]
                 self.save_to_mongo(
                     predictions,
                     collection=_get_db()["pages"],
