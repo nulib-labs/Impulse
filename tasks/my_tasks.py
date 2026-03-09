@@ -437,6 +437,7 @@ class DocumentExtractionTask(FireTaskBase):
                 {
                     "filename": page_dict["filename"],
                     "impulse_identifier": page_dict["impulse_identifier"],
+                    "page_number": page_dict["page_number"],  # add this
                 },
                 {"$set": page_dict},
                 upsert=True,
@@ -455,6 +456,7 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Type of `path_array`:{path_array}")
         for path in path_array:
             filename = path.split("/")[-1]
+            logger.info(f"Filename: {filename}")
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
