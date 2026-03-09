@@ -458,14 +458,6 @@ class DocumentExtractionTask(FireTaskBase):
                 # Get content from S3
                 logger.info("Now loading content from S3")
                 contents.append(get_s3_content(path))
-                predictions = self._predict(contents)
-                self.save_to_mongo(
-                    predictions,
-                    collection=_get_db()["colt"],
-                    impulse_identifier=fw_spec["impulse_identifier"],
-                    filename=filename,
-                )
-                logger.info(f"Predictions:\n{predictions}")
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
@@ -479,6 +471,14 @@ class DocumentExtractionTask(FireTaskBase):
                 predictions = self._predict(content)
                 logger.info(f"Predictions:\n{predictions}")
 
+        predictions = self._predict(contents)
+        self.save_to_mongo(
+            predictions,
+            collection=_get_db()["colt"],
+            impulse_identifier=fw_spec["impulse_identifier"],
+            filename=filename,
+        )
+        logger.info(f"Predictions:\n{predictions}")
         return FWAction()
 
 
