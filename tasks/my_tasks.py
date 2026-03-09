@@ -356,25 +356,21 @@ class DocumentExtractionTask(FireTaskBase):
 
         return None
 
-    def _predict(self, contents):
+    def _predict(self, contents: list[bytes]):
         from chandra.model import InferenceManager
         from chandra.input import load_pdf_images, load_image
         from chandra.model.schema import BatchInputItem
 
         manager = InferenceManager(method="hf")
-        if self.filetype(contents) != "pdf":
-            contents = self.load_jp2(contents)
-            contents = [
-                BatchInputItem(
-                    image=contents, prompt="Extract the text from this document"
-                )
-            ]
-            results = manager.generate(contents)
-            return results
-        else:
-            images = load_pdf_images(contents)
-            results = manager.generate(images)
-            return results
+        batch_input_items: list[BatchInputItem] = [
+            BatchInputItem(
+                image=content,
+                prompt="Extract the text from this document",
+            )
+            for content in contents
+        ]
+        results = manager.generate(batch_input_items)
+        return results
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -454,14 +450,15 @@ class DocumentExtractionTask(FireTaskBase):
         path_array: list[str] = fw_spec[find_path_array_in]
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{path_array}")
+        contents = []
         for path in path_array:
             filename = path.split("/")[-1]
             logger.info(f"Filename: {filename}")
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
-                content = get_s3_content(path)
-                predictions = self._predict(content)
+                contents.append(get_s3_content(path))
+                predictions = self._predict(contents)
                 self.save_to_mongo(
                     predictions,
                     collection=_get_db()["colt"],
