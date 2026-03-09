@@ -429,7 +429,7 @@ class DocumentExtractionTask(FireTaskBase):
     def save_to_mongo(self, model, collection, impulse_identifier, filename):
         """Save any Pydantic model to MongoDB."""
 
-        for page in model:
+        for i, page in enumerate(model):
             page_dict = dataclasses.asdict(page)
             page_dict["filename"] = filename
             page_dict["impulse_identifier"] = impulse_identifier
@@ -437,7 +437,7 @@ class DocumentExtractionTask(FireTaskBase):
                 {
                     "filename": page_dict["filename"],
                     "impulse_identifier": page_dict["impulse_identifier"],
-                    "page_number": page_dict["page_number"],  # add this
+                    "page_number": i,  # add this
                 },
                 {"$set": page_dict},
                 upsert=True,
