@@ -363,7 +363,7 @@ class DocumentExtractionTask(FireTaskBase):
         from PIL import Image
         import io
 
-        manager = InferenceManager(method="hf")
+        manager = InferenceManager(method="vllm")
         batch_input_items: list[BatchInputItem] = [
             BatchInputItem(
                 image=Image.open(io.BytesIO(content)).convert("RGB"),
