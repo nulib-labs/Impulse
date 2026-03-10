@@ -360,11 +360,12 @@ class DocumentExtractionTask(FireTaskBase):
         from chandra.model import InferenceManager
         from chandra.input import load_pdf_images, load_image
         from chandra.model.schema import BatchInputItem
+        from PIL import Image
 
         manager = InferenceManager(method="hf")
         batch_input_items: list[BatchInputItem] = [
             BatchInputItem(
-                image=load_image(content),
+                image=load_image(Image.open(content)),
                 prompt="Extract the text from this document",
             )
             for content in contents
