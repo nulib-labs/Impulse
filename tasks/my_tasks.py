@@ -99,7 +99,7 @@ class BenchmarkNetworkingTask(FireTaskBase):
 
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        success, encoded = cv2.imencode(".png", binary)
+        success, encoded = cv2.imencode(".jp2", binary)
         if not success:
             raise ValueError("Failed to encode binarized image.")
 
