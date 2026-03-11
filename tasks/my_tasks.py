@@ -283,7 +283,12 @@ class ImageProcessingTask(FireTaskBase):
                 binarized = self._binarize(content)
 
                 output_s3_path = "/".join(
-                    ["nu-impulse-production", "DATA", str(impulse_identifier), filestem]
+                    [
+                        "nu-impulse-production",
+                        "DATA",
+                        str(impulse_identifier).upper(),
+                        filestem.upper(),
+                    ]
                 )
 
                 self.save_to_s3("".join(["s3://", output_s3_path]), binarized)
