@@ -257,18 +257,21 @@ class DocumentExtractionTask(FireTaskBase):
         from chandra.model import InferenceManager
         from chandra.input import load_pdf_images, load_image
         from chandra.model.schema import BatchInputItem
+        from tqdm import tqdm
         from PIL import Image
         import io
-
+        results = []
         manager = InferenceManager(method="vllm")
-        batch_input_items: list[BatchInputItem] = [
-            BatchInputItem(
-                image=Image.open(io.BytesIO(content["contents"])).convert("RGB"),
-                prompt="Extract the text from this document",
-            )
-            for content in contents
-        ]
-        results = manager.generate(batch_input_items)
+        logger.info(f"Now predicting data")
+        for content in tqdm(contents, desc="Predicting"):
+            batch_input_items: list[BatchInputItem] = [
+                BatchInputItem(
+                    image=Image.open(io.BytesIO(content["contents"])).convert("RGB"),
+                    prompt="Extract the text from this document",
+                )
+            ]
+            results.append(manager.generate(batch_input_items))
+        logger.success("Predictions complete!")
         for i, result in enumerate(results):
             contents[i]["predictions"] = result
         return contents
@@ -325,8 +328,8 @@ class DocumentExtractionTask(FireTaskBase):
 
     def save_to_mongo(self, results, collection):
         """Save any Pydantic model to MongoDB."""
-    
-        for i, page in enumerate(results):
+        from tqdm import tqdm
+        for i, page in tqdm(enumerate(results), desc="Saving results to database"):
             page_dict = dataclasses.asdict(page)
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
@@ -340,6 +343,7 @@ class DocumentExtractionTask(FireTaskBase):
                 {"$set": page_dict},
                 upsert=True,
             )
+        logger.success("Successfully uploaded all documents!")
         return True
 
     @override
