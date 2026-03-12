@@ -357,27 +357,22 @@ class DocumentExtractionTask(FireTaskBase):
                 # Get content from S3
                 logger.info("Now loading content from S3")
                 contents.append(get_s3_content(path))
+                predictions = self._predict(contents)
+                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
                 predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=_get_db()["pages"])
+                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
                 logger.info(f"Type of predictions:\n{type(predictions)}")
             else:
                 # Handle local file path
                 with open(path, "rb") as f:
                     content = f.read()
-                predictions = self._predict(content)
+                predictions = self._predict(contents)
                 logger.info(f"Predictions:\n{predictions}")
+                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
 
-        predictions = self._predict(contents)
-        self.save_to_mongo(
-            predictions,
-            collection=_get_db()["colt"],
-            impulse_identifier=fw_spec["impulse_identifier"],
-            filename=filename,
-        )
-        logger.info(f"Predictions:\n{predictions}")
         return FWAction()
 
 
