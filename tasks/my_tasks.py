@@ -323,18 +323,19 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, results, collection, impulse_identifier, filename, page_number):
+    def save_to_mongo(self, results, collection):
         """Save any Pydantic model to MongoDB."""
     
         for i, page in enumerate(results):
             page_dict = dataclasses.asdict(page)
-            page_dict["filename"] = filename
-            page_dict["impulse_identifier"] = impulse_identifier
+            page_dict["filename"] = results[i]["filename"]
+            page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
+            page_dict["page_number"] = results[i]["page_number"]
             collection.update_one(
                 {
                     "filename": page_dict["filename"],
                     "impulse_identifier": page_dict["impulse_identifier"],
-                    "page_number": page_number,  # add this
+                    "page_number": page_dict,  # add this
                 },
                 {"$set": page_dict},
                 upsert=True,
@@ -365,24 +366,9 @@ class DocumentExtractionTask(FireTaskBase):
                 "contents": get_s3_content(path),
                 "impulse_identifier": fw_spec["impulse_identifier"]
                 })
-                self._predict(contents)
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
-            elif self.is_impulse_identifier(path[1]):
-                logger.info("Detected Impulse identifier")
-                content = self.get_filepad_contents(path[1])
-                predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
-                logger.info(f"Type of predictions:\n{type(predictions)}")
-            else:
-                # Handle local file path
-                with open(path, "rb") as f:
-                    content = f.read()
-                predictions = self._predict(contents)
-                logger.info(f"Predictions:\n{predictions}")
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
+        results = self._predict(contents)
+        self.save_to_mongo(results, collection=_get_db()["colt"])
 
-            i+=1
-        contents = self._predict([get_s3_content(path)])
         return FWAction()
 
 
