@@ -1,176 +1,18 @@
-from typing import override
+from typing import NoReturn, override
+from cv2.typing import MatLike
+import numpy as np
 import dataclasses
 import re
-import certifi
 import boto3
 from io import BytesIO
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
-from fireworks.utilities.filepad import FilePad
 import os
 from uuid import uuid4
-from pymongo import MongoClient
 import base64
 import fitz
-import time
-
-
-def parse_s3_path(s3_path: str) -> tuple[str, str]:
-    """
-    Parse S3 path into bucket and key.
-
-    Args:
-        s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-    Returns:
-        Tuple of (bucket, key)
-    """
-    # Remove s3:// or s3a:// prefix
-    path = re.sub(r"^s3a?://", "", s3_path)
-    # Split into bucket and key
-    parts = path.split("/", 1)
-    bucket = parts[0]
-    key = parts[1] if len(parts) > 1 else ""
-    return bucket, key
-
-
-def get_s3_content(s3_path: str) -> bytes:
-    """
-    Retrieve content from S3.
-
-    Args:
-        s3_path: S3 URI
-
-    Returns:
-        File content as bytes
-    """
-    bucket, key = parse_s3_path(s3_path)
-
-    session = boto3.Session(profile_name="impulse")
-    s3_client = session.client("s3")
-
-    # Download file content
-    buffer = BytesIO()
-    s3_client.download_fileobj(bucket, key, buffer)
-    buffer.seek(0)
-
-    return buffer.read()
-
-
-def _get_db():
-    client = MongoClient(
-        os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"),
-        tls=True,
-        tlsCAFile=certifi.where(),
-    )
-    fp = FilePad(
-        host=str(os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING")),
-        port=27017,
-        name="fireworks",
-        uri_mode=True,
-        mongoclient_kwargs={"tls": True, "tlsCAFile": certifi.where()},
-    )
-    db = client["praxis"]
-    return db
-
-
-class BenchmarkNetworkingTask(FireTaskBase):
-    _fw_name = "Benchmark Networking"
-
-    @staticmethod
-    def _save_content(output_path, content):
-        import cv2
-
-        _ = cv2.imwrite(output_path, content)
-        pass
-
-    @staticmethod
-    def _binarize(content: bytes) -> bytes:
-        import cv2
-        import numpy as np
-
-        arr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Failed to decode image.")
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        success, encoded = cv2.imencode(".jp2", binary)
-        if not success:
-            raise ValueError("Failed to encode binarized image.")
-
-        return encoded.tobytes()
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
-        """
-        Save string content to S3.
-
-        Args:
-            s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as a string
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        s3_client = boto3.client("s3")
-
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content,  # Encode string as bytes
-        )
-
-        return True
-
-    def validate_input(input_data: dict):
-        pass
-
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        """
-        This method runs the image processing task.
-        """
-        path_array_key = fw_spec.get("find_path_array_in", None)
-        if not path_array_key:
-            logger.critical("Critical spec keys missing. Abandoning.")
-            raise KeyError(f"Find path array not in spec!")
-
-        path_array: str = fw_spec.get(path_array_key, None)
-
-        if not path_array_key:
-            logger.critical("Critical spec keys missing. Abandoning.")
-            raise KeyError(f"{path_array_key} not in spec!")
-
-        impulse_identifier = fw_spec.get(
-            "impulse_identifier", None
-        )  # The impulse identifier can be anything that would be a valid directory name in S3
-        impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
-        binarized_objects: list[tuple[str, str]] = []
-
-        for path in path_array:
-            logger.info(f"`path` is {path}")
-            if self.is_s3_path(path):
-                filestem = path.split("/")[-1]
-
-                start_time = time.time()
-                content = get_s3_content(path)
-                elapsed = time.time() - start_time
-                logger.info(f"Fetched S3 content for `{filestem}` in {elapsed:.3f}s")
-
-        return FWAction()
-
-
+from tasks.helpers import parse_s3_path, get_s3_content, _get_db
+import cv2
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
@@ -180,27 +22,36 @@ class ImageProcessingTask(FireTaskBase):
 
         _ = cv2.imwrite(output_path, content)
         pass
-
+    
     @staticmethod
-    def _binarize(content: bytes) -> bytes:
+    def _to_array(content: bytes) -> np.ndarray:
         import cv2
-        import numpy as np
 
         arr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-        if img is None:
-            raise ValueError("Failed to decode image.")
+        return arr
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    @staticmethod
+    def _binarize(arr: MatLike) -> MatLike:
 
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if len(arr.shape) == 3:
+            arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        # arr is now guaranteed to be single-channel
+        _, binarized = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binarized
+        
+        return binary
 
-        success, encoded = cv2.imencode(".jp2", binary)
-        if not success:
-            raise ValueError("Failed to encode binarized image.")
+    @staticmethod
+    def _denoise(array: MatLike) -> MatLike:
+        import cv2
 
-        return encoded.tobytes()
+
+        return cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
+    
+    @staticmethod
+    def _process(content: bytes) -> None:
+        pass
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -249,10 +100,38 @@ class ImageProcessingTask(FireTaskBase):
         )
 
         return True
+    
+    @staticmethod
+    def _to_grayscale(arr: MatLike) -> MatLike:
+        import cv2
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
 
-    def validate_input(input_data: dict):
-        pass
+    @staticmethod
+    def _is_RGB(arr: MatLike) -> bool:
+        if len(arr.shape) == 3 and arr.shape[2] == 3:
+            return True
+        else:
+            return False
+    
+    @staticmethod
+    def _encode_to_image(arr: MatLike, filetype: str) -> tuple[bytes, str]:
+        import cv2
+        from PIL import Image
+        import io
 
+        if filetype == ".jp2":
+            rgb = cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB) if len(arr.shape) == 2 else cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG2000")
+            return buf.getvalue(), filetype
+
+        success, buffer = cv2.imencode(filetype, arr)
+        if not success:
+            raise RuntimeError(f"cv2.imencode failed for {filetype}")
+        return buffer.tobytes(), filetype
+
+        
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
@@ -263,9 +142,9 @@ class ImageProcessingTask(FireTaskBase):
             logger.critical("Critical spec keys missing. Abandoning.")
             raise KeyError(f"Find path array not in spec!")
 
-        path_array: str = fw_spec.get(path_array_key, None)
+        path_array: str | None = fw_spec.get(path_array_key, None)
 
-        if not path_array_key:
+        if not path_array:
             logger.critical("Critical spec keys missing. Abandoning.")
             raise KeyError(f"{path_array_key} not in spec!")
 
@@ -274,28 +153,41 @@ class ImageProcessingTask(FireTaskBase):
         )  # The impulse identifier can be anything that would be a valid directory name in S3
         impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
         output_paths: list[tuple[str, str]] = []
-
+        import cv2
+        from pathlib import Path
         for path in path_array:
             logger.info(f"`path` is {path}")
             if self.is_s3_path(path):
-                filestem = path.split("/")[-1]
-                content = get_s3_content(path)
-                binarized = self._binarize(content)
+                filestem = Path(path.split("/")[-1])
+                 
+            
 
+                content = get_s3_content(path)
+                raw_arr = self._to_array(content)
+                
+                if self._is_RGB(raw_arr):
+                    raw_arr = self._to_grayscale(raw_arr)
+
+                bin_arr: MatLike = self._binarize(raw_arr)
+                dst_arr: MatLike = self._denoise(bin_arr)
+                buffer, filetype = self._encode_to_image(bin_arr, ".jp2")
                 output_s3_path = "/".join(
                     [
                         "nu-impulse-production",
                         "DATA",
                         str(impulse_identifier).upper(),
-                        filestem.upper(),
+                        str(filestem.with_suffix(filetype)),
                     ]
                 )
-
-                self.save_to_s3("".join(["s3://", output_s3_path]), binarized)
+                if type(buffer) == np.ndarray:
+                    buffer = buffer.to_bytes
+                else:
+                    buffer = buffer
+                    self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
             else:
                 with open(path, "rb") as f:
                     content = f.read()
-                binarized = self._binarize(content)
+                    exit()
 
         return FWAction()
 
@@ -489,632 +381,3 @@ class DocumentExtractionTask(FireTaskBase):
         return FWAction()
 
 
-class TextExtractionTask(FireTaskBase):
-    _fw_name = "Text Extraction Task"
-    path_array: list[str]
-
-    @staticmethod
-    def _extract(content):
-        pass
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        return FWAction()
-
-
-class METSXMLToHathiTrustManifestTask(FireTaskBase):
-    _fw_name = "MetsXML To HathiTrust Manifest Task"
-    path: str
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def save_to_s3(self, s3_path: str, content: str) -> str:
-        """
-        Save string content to S3.
-
-        Args:
-            s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as a string
-        """
-        bucket, key = self.parse_s3_path(s3_path)
-
-        s3_client = boto3.client("s3")
-
-        # Convert string to bytes
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content.encode("utf-8"),  # Encode string as bytes
-        )
-
-        return s3_path
-
-    def _convert_mets_to_yml(*args):
-        """
-        FireWorks task function: Convert a METS XML file from S3 into a YAML file
-        following HathiTrust ingest specs, and save the YAML back to S3.
-        args[0] = s3_key of the METS XML file in S3
-        args[1] = filename
-        args[2] = accession_number
-        """
-        from lxml import etree as ET
-
-        s3_key = args[0]
-        filename = args[1]
-        accession_number = args[2]
-
-        s3_impulse = boto3.client(
-            "s3",
-            aws_access_key_id=os.getenv("IMPULSE_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("IMPULSE_SECRET_ACCESS_KEY"),
-        )
-
-        output_filename = filename.replace(".xml", ".yaml")
-        logger.info(f"Value of output filename: {output_filename}")
-        response = s3_impulse.get_object(Bucket="nu-impulse-production", Key=s3_key)
-        data = response["Body"].read()
-
-        # === Step 2: Parse the XML directly from memory ===
-        try:
-            parser = ET.XMLParser(remove_blank_text=True)
-            tree = ET.ElementTree(ET.fromstring(data, parser))
-            root = tree.getroot()
-        except ET.XMLSyntaxError as e:
-            print(f"Error: Invalid XML file: {e}")
-            raise RuntimeError("Invalid METS XML file") from e
-
-        ns = {
-            "xmlns": "http://www.loc.gov/METS/",
-            "xlink": "http://www.w3.org/1999/xlink",
-        }
-
-        def find_filename_by_file_id(file_id):
-            node = root.xpath(
-                f"//xmlns:file[@ID='{file_id}']/xmlns:FLocat", namespaces=ns
-            )
-            if not node:
-                return None
-            href = node[0].get("{http://www.w3.org/1999/xlink}href", "")
-            return href[7:] if href.startswith("file://") else href
-
-        # === Step 3: Extract header information ===
-        mets_hdr = root.xpath("//xmlns:metsHdr", namespaces=ns)
-        capture_date = mets_hdr[0].get("CREATEDATE") + "-06:00" if mets_hdr else None
-
-        suprascan = False
-        scanning_order_rtl = False
-        reading_order_rtl = False
-        resolution = 400
-
-        yaml_lines = []
-        yaml_lines.append(f"capture_date: {capture_date}")
-        if suprascan:
-            yaml_lines.append("scanner_make: SupraScan")
-            yaml_lines.append("scanner_model: Quartz A1")
-        else:
-            yaml_lines.append("scanner_make: Kirtas")
-            yaml_lines.append("scanner_model: APT 1200")
-        yaml_lines.append(
-            'scanner_user: "Northwestern University Library: Repository & Digital Curation"'
-        )
-        yaml_lines.append(f"contone_resolution_dpi: {resolution}")
-        yaml_lines.append(f"image_compression_date: {capture_date}")
-        yaml_lines.append("image_compression_agent: northwestern")
-        yaml_lines.append('image_compression_tool: ["LIMB v4.5.0.0"]')
-        yaml_lines.append(
-            f"scanning_order: {'right-to-left' if scanning_order_rtl else 'left-to-right'}"
-        )
-        yaml_lines.append(
-            f"reading_order: {'right-to-left' if reading_order_rtl else 'left-to-right'}"
-        )
-        yaml_lines.append("pagedata:")
-
-        # === Step 4: Logical structMap page iteration ===
-        logical_pages = root.xpath(
-            '//xmlns:structMap[@TYPE="logical"]//xmlns:div[@TYPE="page"]', namespaces=ns
-        )
-
-        for element in logical_pages:
-            fileptr = element.xpath(
-                "./xmlns:fptr[starts-with(@FILEID, 'JP2')]", namespaces=ns
-            )
-            if not fileptr:
-                continue
-            file_id = fileptr[0].get("FILEID")
-            page_filename = find_filename_by_file_id(file_id)
-            if not page_filename:
-                continue
-
-            parent = element.getparent()
-            parent_label = parent.get("LABEL", "")
-            parent_type = parent.get("TYPE", "")
-            orderlabel = element.get("ORDERLABEL", "")
-            line = None
-
-            # Label logic
-            if element == parent[0]:
-                if (
-                    parent_label == "Cover"
-                    and parent_type == "cover"
-                    and parent == logical_pages[0].getparent()
-                ):
-                    label = "FRONT_COVER"
-                    line = f'{page_filename}: {{ label: "{label}" }}'
-                elif parent_label == "Front Matter" and orderlabel:
-                    line = f'{page_filename}: {{ orderlabel: "{orderlabel}" }}'
-                elif parent_label == "Title":
-                    label = "TITLE"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label == "Contents":
-                    label = "TABLE_OF_CONTENTS"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label == "Preface":
-                    label = "PREFACE"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label.startswith("Chapter") or parent_label == "Appendix":
-                    label = "CHAPTER_START"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label in ("Notes", "Bibliography"):
-                    label = "REFERENCES"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label == "Index":
-                    label = "INDEX"
-                    line = (
-                        f'{page_filename}: {{ orderlabel: "{orderlabel}", label: "{label}" }}'
-                        if orderlabel
-                        else f'{page_filename}: {{ label: "{label}" }}'
-                    )
-                elif parent_label == "Cover" and parent_type == "cover":
-                    label = "BACK_COVER"
-                    line = f'{page_filename}: {{ label: "{label}" }}'
-            else:
-                if orderlabel:
-                    line = f'{page_filename}: {{ orderlabel: "{orderlabel}" }}'
-
-            if line:
-                yaml_lines.append("    " + line)
-
-        # === Step 5: Write YAML to S3 ===
-        yaml_content: str = "\n".join(yaml_lines)
-        return yaml_content
-
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        logger.info("Now loading content from S3")
-        input_path = fw_spec["input_path"]
-        output_path = fw_spec["output_path"]
-        content = get_s3_content(input_path)
-
-        yaml_content: str = self.convert_mets_to_yml(content)
-        s3_path = self.save_to_s3(output_path, yaml_content)
-
-        return FWAction(update_spec={"hathitrust_yaml_path": s3_path})
-
-
-class ExtractMetadata(FireTaskBase):
-    _fw_name = "Extract Metadata"
-
-    IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-    @staticmethod
-    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
-        """Convert each PDF page to a base64-encoded PNG string."""
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        images = []
-        for page in doc:
-            pix = page.get_pixmap(dpi=150)
-            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-            images.append(img_b64)
-        return images
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    @staticmethod
-    def extract_valid_json(content: str) -> dict:
-        import json
-
-        """Strip non-JSON content and parse the first valid JSON object found."""
-        # Remove markdown fences if present
-        content = re.sub(r"```(?:json)?\s*", "", content).strip()
-
-        # Try parsing directly first
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-
-        # Find the first { ... } block
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-
-        # Return safe default if nothing works
-        return {"main_place": None, "key_people": []}
-
-    @staticmethod
-    def extract_spacy_entities(text: str) -> tuple[list[str], list[str]]:
-        import spacy
-
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp(text)
-        gpes, people = [], []
-        for ent in doc.ents:
-            if ent.label_ == "GPE":
-                gpes.append(ent.text)
-            elif ent.label_ == "PERSON":
-                people.append(ent.text)
-        return list(dict.fromkeys(gpes)), list(dict.fromkeys(people))
-
-    @staticmethod
-    def ask_ai(
-        gpes: list[str],
-        people: list[str],
-        document_text=None,
-        pdf_bytes=None,
-        image_bytes=None,
-    ):
-        from ollama import chat
-
-        prompt = f"""
-You are a metadata extraction assistant. SpaCy has already performed
-named-entity recognition on the document and surfaced these candidates:
-
-  Candidate places : {gpes if gpes else "none detected"}
-  Candidate people : {people if people else "none detected"}
-
-Using these candidates (and the document text below, if provided), identify:
-
-1. The SINGLE most important or most-frequently-mentioned location.
-   - Prefer the place most central to the document's subject matter.
-   - Resolve ambiguous names to their most specific form
-     (e.g. "Washington" → "Washington, D.C." or "Washington State").
-   - If all candidates look spurious, attempt to extract the correct
-     place yourself; otherwise return null.
-
-2. Up to 6 KEY PEOPLE mentioned in the document.
-   - Prefer people who are subjects of the document over passing references.
-   - If all candidates look spurious, attempt to extract them yourself;
-     otherwise return an empty list.
-
-Return ONLY valid JSON — no prose, no markdown fences — in exactly this shape:
-{{
-  "main_place": "<place or null>",
-  "key_people": ["<name>", "..."]
-}}
-"""
-        message = {"role": "user", "content": prompt}
-
-        if pdf_bytes:
-            message["images"] = ExtractMetadata.pdf_to_images(pdf_bytes)
-        elif image_bytes:
-            message["images"] = [base64.b64encode(image_bytes).decode("utf-8")]
-
-        if document_text:
-            message["content"] += f"\n\nDocument text:\n{document_text}"
-        response = chat(model="gemma3:27b", messages=[message], stream=False)
-        print(response["message"]["content"])
-        # or access fields directly from the response object
-        return response.message.content
-
-    def _load_bytes(self, document: str) -> bytes:
-        if document.startswith(("s3://", "s3a://")):
-            logger.info("Document starts with s3, pulling from bucket")
-            return get_s3_content(document)
-        with open(document, "rb") as f:
-            return f.read()
-
-    def save_to_mongo(self, document, collection):
-        collection.insert_one(document)
-        return True
-
-    def run_task(self, fw_spec: dict):
-        document = fw_spec["document"]
-        accession_number: str | None = fw_spec.get("accession_number", None)
-        if not accession_number:
-            raise KeyError(f"Accession number not in spec!")
-        # Case 1: PDF
-        if isinstance(document, str) and document.lower().endswith(".pdf"):
-            pdf_bytes = self._load_bytes(document)
-            try:
-                import pdfminer.high_level as pdfminer
-
-                plain_text = pdfminer.extract_text(BytesIO(pdf_bytes))
-            except Exception:
-                plain_text = ""
-            gpes, people = (
-                self.extract_spacy_entities(plain_text) if plain_text else ([], [])
-            )
-            metadata = self.ask_ai(gpes=gpes, people=people, pdf_bytes=pdf_bytes)
-
-        # Case 2: Image file
-        elif (
-            isinstance(document, str)
-            and os.path.splitext(document)[1].lower() in self.IMAGE_EXTENSIONS
-        ):
-            image_bytes = self._load_bytes(document)
-            metadata = self.ask_ai(gpes=[], people=[], image_bytes=image_bytes)
-
-        # Case 3: List of S3/file paths (text files)
-        elif isinstance(document, list):
-            parts = [self.get_s3_content(p).decode("utf-8") for p in document]
-            combined = "\n".join(parts)
-            gpes, people = self.extract_spacy_entities(combined)
-            metadata = self.ask_ai(gpes=gpes, people=people, document_text=combined)
-        # Case 4: Raw string text
-        elif isinstance(document, str):
-            gpes, people = self.extract_spacy_entities(document)
-            metadata = self.ask_ai(gpes=gpes, people=people, document_text=document)
-        else:
-            raise ValueError(f"Unsupported document type: {type(document)}")
-        document = self.extract_valid_json(metadata if metadata else "")
-        document["accession_number"] = accession_number
-        self.save_to_mongo(document=document, collection=_get_db()["metadata"])
-        return FWAction(update_spec={"document_metadata": document})
-
-
-class SummariesTask(FireTaskBase):
-    _fw_name = "Summaries Task"
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        path = re.sub(r"^s3a?://", "", s3_path)
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    @staticmethod
-    def pdf_to_images(pdf_bytes: bytes) -> list[str]:
-        """Convert each PDF page to a base64-encoded PNG string."""
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        images = []
-        for page in doc:
-            pix = page.get_pixmap(dpi=150)
-            img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-            images.append(img_b64)
-        return images
-
-    @staticmethod
-    def image_to_b64(image_bytes: bytes) -> str:
-        return base64.b64encode(image_bytes).decode("utf-8")
-
-    @staticmethod
-    def ask_ai(document_text=None, pdf_bytes=None, image_bytes=None):
-        from ollama import chat
-
-        prompt = """
-        Provide a short summary of the document.
-        Do not return anything except plain text summary.
-        Use markdown only if necessary.
-        """
-        message = {
-            "role": "user",
-            "content": prompt,
-        }
-
-        if pdf_bytes:
-            # Convert PDF pages to images — gemma3 can't read raw PDF bytes
-            message["images"] = SummariesTask.pdf_to_images(pdf_bytes)
-
-        elif image_bytes:
-            message["images"] = [SummariesTask.image_to_b64(image_bytes)]
-
-        if document_text:
-            message["content"] += f"\n\n{document_text}"
-
-        response = chat(
-            model="gemma3:27b",
-            messages=[message],
-        )
-        return response.message.content
-
-    def run_task(self, fw_spec):
-        document = fw_spec["document"]
-
-        IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-        # Case 1: S3 or local file path
-        if isinstance(document, str) and (
-            document.startswith("s3://")
-            or document.startswith("s3a://")
-            or "/" in document
-        ):
-            ext = os.path.splitext(document)[1].lower()
-
-            if document.startswith(("s3://", "s3a://")):
-                print("Document starts with s3, pulling from bucket")
-                content_bytes = get_s3_content(document)
-            else:
-                with open(document, "rb") as f:
-                    content_bytes = f.read()
-
-            if ext == ".pdf":
-                summary = self.ask_ai(pdf_bytes=content_bytes)
-            elif ext in IMAGE_EXTENSIONS:
-                summary = self.ask_ai(image_bytes=content_bytes)
-            else:
-                # Treat as text file
-                summary = self.ask_ai(document_text=content_bytes.decode("utf-8"))
-
-        # Case 2: List of S3/file paths
-        elif isinstance(document, list):
-            document_text = []
-            for path in document:
-                content = self.get_s3_content(path)
-                document_text.append(content.decode("utf-8"))
-            summary = self.ask_ai(document_text="\n".join(document_text))
-
-        # Case 3: Raw string text
-        elif isinstance(document, str):
-            summary = self.ask_ai(document_text=document)
-
-        else:
-            raise ValueError(f"Unsupported document type: {type(document)}")
-
-        print(summary)
-        return FWAction(update_spec={"document_summary": summary})
-
-
-class GeocodeTask(FireTaskBase):
-    """
-    Geocode each document's main_place using Nominatim (OpenStreetMap).
-    Adds lat/lon coordinates to the metadata results.
-    Rate-limited to 1 request/second per Nominatim's usage policy.
-
-    fw_spec keys:
-      metadata_path — S3 path to GetMetadataTask output
-      output_path   — S3 path to write geocoded results JSON
-      debug         — if True, read/write local files
-    """
-
-    _fw_name = "Geocode Task"
-
-    @staticmethod
-    def _geocode(place: str) -> dict | None:
-        """Call Nominatim and return {lat, lon, display_name} or None."""
-        import requests
-
-        if not place:
-            return None
-
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {
-            "q": place,
-            "format": "json",
-            "limit": 1,
-            "addressdetails": 1,
-        }
-        headers = {"User-Agent": NOMINATIM_UA}
-
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
-            resp.raise_for_status()
-            results = resp.json()
-            if results:
-                r = results[0]
-                return {
-                    "lat": float(r["lat"]),
-                    "lon": float(r["lon"]),
-                    "display_name": r.get("display_name", place),
-                }
-        except Exception as e:
-            logger.warning(f"Geocode failed for '{place}': {e}")
-        return None
-
-
-class NERTask(FireTaskBase):
-    """
-    Pulls all pages of a document from MongoDB document.
-    Concatenates all text together.
-    Runs bert-base-NER on the text together.
-    Puts the data into nlp[works] coll
-
-    """
-
-    _fw_name = "NER Task"
-
-    @override
-    def run_task(self, fw_spec: dict) -> FWAction:
-        from transformers import AutoTokenizer, AutoModelForTokenClassification
-        from transformers import pipeline
-
-        tokenizer = AutoTokenizer.from_pretrained("dslim/bert-base-NER")
-        model = AutoModelForTokenClassification.from_pretrained("dslim/bert-base-NER")
-
-        nlp = pipeline("ner", model=model, tokenizer=tokenizer)
-        example = "My name is Wolfgang and I live in Berlin"
-
-        ner_results = nlp(example)
-        print(ner_results)
