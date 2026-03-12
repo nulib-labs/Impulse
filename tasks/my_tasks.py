@@ -323,7 +323,7 @@ class DocumentExtractionTask(FireTaskBase):
 
     def save_to_mongo(self, model, collection, impulse_identifier, filename):
         """Save any Pydantic model to MongoDB."""
-
+    
         for i, page in enumerate(model):
             page_dict = dataclasses.asdict(page)
             page_dict["filename"] = filename
@@ -356,7 +356,8 @@ class DocumentExtractionTask(FireTaskBase):
             if self.is_s3_path(path):
                 # Get content from S3
                 logger.info("Now loading content from S3")
-                contents.append(get_s3_content(path))
+                predictions = self._predict([get_s3_content(path)])
+                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
             elif self.is_impulse_identifier(path[1]):
                 logger.info("Detected Impulse identifier")
                 content = self.get_filepad_contents(path[1])
@@ -371,8 +372,6 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info(f"Predictions:\n{predictions}")
                 self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
 
-        predictions = self._predict(contents)
-        self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename)
         return FWAction()
 
 
