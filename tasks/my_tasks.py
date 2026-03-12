@@ -271,7 +271,7 @@ class DocumentExtractionTask(FireTaskBase):
         results = manager.generate(batch_input_items)
         for i, result in enumerate(results):
             contents[i]["predictions"] = result
-        return results
+        return contents
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
