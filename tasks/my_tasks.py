@@ -13,6 +13,9 @@ import base64
 import fitz
 from tasks.helpers import parse_s3_path, get_s3_content, _get_db
 import cv2
+
+CHUNK_SIZE = 100
+
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
@@ -192,188 +195,83 @@ class ImageProcessingTask(FireTaskBase):
         return FWAction()
 
 
-class DocumentExtractionTask(FireTaskBase):
-    _fw_name = "Document Extraction Task"
 
-    def filetype(self, contents: bytes) -> str | None:
-        """
-        Determine file type from raw bytes using magic numbers.
+@override
+def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
+    """
+    Runs OCR in batches of <=100 documents and saves results to MongoDB.
+    """
 
-        Args:
-            contents: File contents as bytes
+    find_path_array_in: list[str] = fw_spec["find_path_array_in"]
+    path_array: list[str] = fw_spec[find_path_array_in]
 
-        Returns:
-            File extension string (e.g. 'png', 'pdf') or None if unknown
-        """
-        if not contents or len(contents) < 4:
-            return None
+    logger.debug(f"Value of `path_array`: {path_array}")
 
-        # PNG
-        if contents.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "png"
+    batch: list[dict] = []
+    filenames: list[str] = []
+    page_numbers: list[int] = []
 
-        # JPEG
-        if contents.startswith(b"\xff\xd8\xff"):
-            return "jpg"
+    impulse_identifier = fw_spec["impulse_identifier"]
+    collection = _get_db()["colt"]
 
-        # GIF
-        if contents.startswith((b"GIF87a", b"GIF89a")):
-            return "gif"
+    def process_batch():
+        """Run prediction + Mongo save for current batch."""
+        if not batch:
+            return
 
-        # PDF
-        if contents.startswith(b"%PDF"):
-            return "pdf"
+        logger.info(f"Processing batch of {len(batch)} documents")
 
-        # ZIP (also used by docx, xlsx, pptx, etc.)
-        if contents.startswith(b"PK\x03\x04"):
-            return "zip"
+        results = self._predict(batch)
 
-        # GZIP
-        if contents.startswith(b"\x1f\x8b"):
-            return "gz"
-
-        # MP3 (ID3 tag)
-        if contents.startswith(b"ID3"):
-            return "mp3"
-
-        # MP4
-        if len(contents) > 8 and contents[4:8] == b"ftyp":
-            return "mp4"
-
-        # JP2 (JPEG 2000)
-        if contents.startswith(b"\x00\x00\x00\x0cjP  \r\n\x87\n"):
-            return "jp2"
-
-        # Plain text (heuristic)
-        try:
-            contents.decode("utf-8")
-            return "txt"
-        except UnicodeDecodeError:
-            pass
-
-        return None
-
-    def _predict(self, contents: list[bytes]):
-        from chandra.model import InferenceManager
-        from chandra.input import load_pdf_images, load_image
-        from chandra.model.schema import BatchInputItem
-        from PIL import Image
-        import io
-
-        manager = InferenceManager(method="vllm")
-        batch_input_items: list[BatchInputItem] = [
-            BatchInputItem(
-                image=Image.open(io.BytesIO(content)).convert("RGB"),
-                prompt="Extract the text from this document",
-            )
-            for content in contents
-        ]
-        results = manager.generate(batch_input_items)
-        return results
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        # Remove s3:// or s3a:// prefix
-        path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    @staticmethod
-    def is_impulse_identifier(value: str) -> bool:
-        """
-        Checks if value is impulse identifier.
-        """
-
-        if "impulse:" in value:
-            return True
-        else:
-            return False
-
-    @staticmethod
-    def load_jp2(contents: bytes):
-        import numpy as np
-        import cv2
-        from PIL import Image
-        from io import BytesIO
-
-        arr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR_RGB)
-        img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        return img
-
-    def save_to_mongo(self, model, collection, impulse_identifier, filename, page_number):
-        """Save any Pydantic model to MongoDB."""
-    
-        for i, page in enumerate(model):
+        for i, page in enumerate(results):
             page_dict = dataclasses.asdict(page)
-            page_dict["filename"] = filename
+            page_dict["filename"] = filenames[i]
             page_dict["impulse_identifier"] = impulse_identifier
+            page_dict["page_number"] = page_numbers[i]
+
             collection.update_one(
                 {
                     "filename": page_dict["filename"],
                     "impulse_identifier": page_dict["impulse_identifier"],
-                    "page_number": page_number,  # add this
+                    "page_number": page_dict["page_number"],
                 },
                 {"$set": page_dict},
                 upsert=True,
             )
-        return True
 
-    @override
-    def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
-        """
-        This method runs the OCR task.
-        This method looks for `path_array`.
-        """
-        find_path_array_in: list[str] = fw_spec["find_path_array_in"]
-        path_array: list[str] = fw_spec[find_path_array_in]
-        logger.debug(f"Value of `path_array`:{path_array}")
-        logger.debug(f"Type of `path_array`:{path_array}")
-        contents = []
-        i = 1
-        for path in path_array:
-            filename = path.split("/")[-1]
-            logger.info(f"Filename: {filename}")
-            if self.is_s3_path(path):
-                # Get content from S3
-                logger.info("Now loading content from S3")
-                predictions = self._predict([get_s3_content(path)])
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
-            elif self.is_impulse_identifier(path[1]):
-                logger.info("Detected Impulse identifier")
-                content = self.get_filepad_contents(path[1])
-                predictions = self._predict(content)
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
-                logger.info(f"Type of predictions:\n{type(predictions)}")
-            else:
-                # Handle local file path
-                with open(path, "rb") as f:
-                    content = f.read()
-                predictions = self._predict(contents)
-                logger.info(f"Predictions:\n{predictions}")
-                self.save_to_mongo(model=predictions, collection=_get_db()["colt"], impulse_identifier=fw_spec["impulse_identifier"], filename=filename, page_number=i)
+        batch.clear()
+        filenames.clear()
+        page_numbers.clear()
 
-            i+=1
-        return FWAction()
+    for i, path in enumerate(path_array, start=1):
 
+        filename = path.split("/")[-1]
+        logger.info(f"Loading {filename}")
 
+        if self.is_s3_path(path):
+            content_bytes = get_s3_content(path)
+
+        elif self.is_impulse_identifier(path):
+            content_bytes = self.get_filepad_contents(path)
+
+        else:
+            with open(path, "rb") as f:
+                content_bytes = f.read()
+
+        batch.append({
+            "filename": filename,
+            "page_number": i,
+            "contents": content_bytes,
+            "impulse_identifier": impulse_identifier
+        })
+
+        filenames.append(filename)
+        page_numbers.append(i)
+
+        if len(batch) >= CHUNK_SIZE:
+            process_batch()
+
+    # process remaining docs
+    process_batch()
+
+    return FWAction()
