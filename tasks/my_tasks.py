@@ -342,8 +342,8 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
         from tqdm import tqdm
         for i, page in tqdm(enumerate(results), desc="Saving results to database"):
-            print(results.keys())
-            print(type(results["predictions"]))
+            print(page)
+            print(type(page["predictions"]))
             page_dict = dataclasses.asdict(page["predictions"])
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
