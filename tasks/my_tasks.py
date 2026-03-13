@@ -265,7 +265,8 @@ class DocumentExtractionTask(FireTaskBase):
         results = []
         manager = InferenceManager(method="vllm")
         logger.info(f"Now predicting data")
-        for content in tqdm(batched(contents, 16), desc="Predicting"):
+        BATCH_SIZE = 2
+        for content in tqdm(batched(contents, BATCH_SIZE), desc="Predicting", total=int(len(contents) / 2)):
             for b in content:
                 # Convert JP2 to JPEG-compatible RGB image
                 image = Image.open(io.BytesIO(b["contents"])).convert("RGB")
@@ -341,7 +342,7 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
         from tqdm import tqdm
         for i, page in tqdm(enumerate(results), desc="Saving results to database"):
-            page_dict = dataclasses.asdict(page)
+            page_dict = dataclasses.asdict(page["predictions"])
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
             page_dict["page_number"] = results[i]["page_number"]
