@@ -280,7 +280,7 @@ class DocumentExtractionTask(FireTaskBase):
                         prompt="Extract the text from this document.",
                     )
                 ]
-                results.append(manager.generate(batch_input_items))
+                results.extend(manager.generate(batch_input_items))
         logger.success("Predictions complete!")
         for i, result in enumerate(results):
             contents[i]["predictions"] = result
