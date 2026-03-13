@@ -255,23 +255,30 @@ class DocumentExtractionTask(FireTaskBase):
 
     def _predict(self, contents: list[dict]):
         from chandra.model import InferenceManager
-        from chandra.model.schema import BatchInputItem, BatchOutputItem
+        from chandra.input import load_pdf_images, load_image
+        from chandra.model.schema import BatchInputItem
         from tqdm import tqdm
         from PIL import Image
         import io
         from itertools import batched
 
-        results: list[BatchOutputItem] = []
+        results = []
         manager = InferenceManager(method="vllm")
         logger.info(f"Now predicting data")
-        for batch in tqdm(batched(contents, 8), desc="Predicting"):
-            for b in batch:
-                img = Image.open(io.BytesIO(b["contents"])).convert("RGB")
+        for content in tqdm(batched(contents, 16), desc="Predicting"):
+            for b in content:
+                # Convert JP2 to JPEG-compatible RGB image
+                image = Image.open(io.BytesIO(b["contents"])).convert("RGB")
+                
+                # Save as JPEG bytes and reload to ensure JPEG format compatibility
+                jpeg_buffer = io.BytesIO()
+                image.save(jpeg_buffer, format="JPEG")
+                jpeg_buffer.seek(0)
                 
                 batch_input_items: list[BatchInputItem] = [
                     BatchInputItem(
-                        image=img,
-                        prompt="Extract the text from this document",
+                        image=Image.open(jpeg_buffer).convert("RGB"),
+                        prompt="Extract the text from this document.",
                     )
                 ]
                 results.append(manager.generate(batch_input_items))
@@ -334,7 +341,7 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
         from tqdm import tqdm
         for i, page in tqdm(enumerate(results), desc="Saving results to database"):
-            page_dict = dataclasses.asdict(page["result"])
+            page_dict = dataclasses.asdict(page)
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
             page_dict["page_number"] = results[i]["page_number"]
