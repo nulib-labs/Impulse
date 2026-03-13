@@ -260,17 +260,20 @@ class DocumentExtractionTask(FireTaskBase):
         from tqdm import tqdm
         from PIL import Image
         import io
+        from itertools import batched
+
         results = []
         manager = InferenceManager(method="vllm")
         logger.info(f"Now predicting data")
-        for content in tqdm(contents, desc="Predicting"):
-            batch_input_items: list[BatchInputItem] = [
-                BatchInputItem(
-                    image=Image.open(io.BytesIO(content["contents"])).convert("RGB"),
-                    prompt="Extract the text from this document",
-                )
-            ]
-            results.append(manager.generate(batch_input_items))
+        for batch in tqdm(batched(contents, 8), desc="Predicting"):
+            for b in batch:
+                batch_input_items: list[BatchInputItem] = [
+                    BatchInputItem(
+                        image=Image.open(io.BytesIO(b["contents"])).convert("RGB"),
+                        prompt="Extract the text from this document",
+                    )
+                ]
+                results.append(manager.generate(batch_input_items))
         logger.success("Predictions complete!")
         for i, result in enumerate(results):
             contents[i]["predictions"] = result
