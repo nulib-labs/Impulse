@@ -255,7 +255,6 @@ class DocumentExtractionTask(FireTaskBase):
 
     def _predict(self, contents: list[dict]):
         from chandra.model import InferenceManager
-        from chandra.input import load_pdf_images, load_image
         from chandra.model.schema import BatchInputItem
         from tqdm import tqdm
         from PIL import Image
@@ -267,9 +266,14 @@ class DocumentExtractionTask(FireTaskBase):
         logger.info(f"Now predicting data")
         for batch in tqdm(batched(contents, 8), desc="Predicting"):
             for b in batch:
+                img = Image.open(io.BytesIO(b["contents"])).convert("RGB")
+                
+                # Resize while preserving aspect ratio (only downscales)
+                img.thumbnail((1024, 1024), Image.LANCZOS)
+                
                 batch_input_items: list[BatchInputItem] = [
                     BatchInputItem(
-                        image=Image.open(io.BytesIO(b["contents"])).convert("RGB"),
+                        image=img,
                         prompt="Extract the text from this document",
                     )
                 ]
