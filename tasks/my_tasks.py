@@ -346,7 +346,7 @@ class DocumentExtractionTask(FireTaskBase):
                 {
                     "filename": page_dict["filename"],
                     "impulse_identifier": page_dict["impulse_identifier"],
-                    "page_number": page_dict,  # add this
+                    "page_number": page_dict["page_number"],  # was incorrectly set to page_dict
                 },
                 {"$set": page_dict},
                 upsert=True,
