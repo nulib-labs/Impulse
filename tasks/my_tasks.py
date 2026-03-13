@@ -341,6 +341,7 @@ class DocumentExtractionTask(FireTaskBase):
         from tqdm import tqdm
         for i, page in tqdm(enumerate(results), desc="Saving results to database"):
             print(type(page["predictions"]))
+            print(len(page["predictions"]))
             page_dict = dataclasses.asdict(page["predictions"])
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
