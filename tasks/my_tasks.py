@@ -1,4 +1,6 @@
+from multiprocessing import Pool
 from typing import NoReturn, override
+from pathlib import Path
 from cv2.typing import MatLike
 import numpy as np
 import dataclasses
@@ -131,12 +133,45 @@ class ImageProcessingTask(FireTaskBase):
             raise RuntimeError(f"cv2.imencode failed for {filetype}")
         return buffer.tobytes(), filetype
 
+    def _task_def(self, x, impulse_identifier):
+        logger.info(f"`path` is {x}")
+        if self.is_s3_path(x):
+            filestem = Path(x.split("/")[-1])
+
+            content = get_s3_content(x)
+            raw_arr = self._to_array(content)
+            
+            if self._is_RGB(raw_arr):
+                raw_arr = self._to_grayscale(raw_arr)
+
+            bin_arr: MatLike = self._binarize(raw_arr)
+            dst_arr: MatLike = self._denoise(bin_arr)
+            buffer, filetype = self._encode_to_image(bin_arr, ".jp2")
+            output_s3_path = "/".join(
+                [
+                    "nu-impulse-production",
+                    "DATA",
+                    str(impulse_identifier).upper(),
+                    str(filestem.with_suffix(filetype)),
+                ]
+            )
+            if type(buffer) == np.ndarray:
+                buffer = buffer.to_bytes
+            else:
+                buffer = buffer
+                self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
+        else:
+            with open(x, "rb") as f:
+                content = f.read()
+                exit()
         
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
         This method runs the image processing task.
         """
+        from pathlib import Path
+        from functools import partial
         path_array_key = fw_spec.get("find_path_array_in", None)
         if not path_array_key:
             logger.critical("Critical spec keys missing. Abandoning.")
@@ -153,42 +188,13 @@ class ImageProcessingTask(FireTaskBase):
         )  # The impulse identifier can be anything that would be a valid directory name in S3
         impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
         output_paths: list[tuple[str, str]] = []
-        import cv2
-        from pathlib import Path
+
+        with Pool(processes=None) as pool:
+            result = pool.map(partial(self._task_def, impulse_identifier=impulse_identifier), path_array)
+            print(result)
         for path in path_array:
-            logger.info(f"`path` is {path}")
-            if self.is_s3_path(path):
-                filestem = Path(path.split("/")[-1])
-                 
-            
-
-                content = get_s3_content(path)
-                raw_arr = self._to_array(content)
-                
-                if self._is_RGB(raw_arr):
-                    raw_arr = self._to_grayscale(raw_arr)
-
-                bin_arr: MatLike = self._binarize(raw_arr)
-                dst_arr: MatLike = self._denoise(bin_arr)
-                buffer, filetype = self._encode_to_image(bin_arr, ".jp2")
-                output_s3_path = "/".join(
-                    [
-                        "nu-impulse-production",
-                        "DATA",
-                        str(impulse_identifier).upper(),
-                        str(filestem.with_suffix(filetype)),
-                    ]
-                )
-                if type(buffer) == np.ndarray:
-                    buffer = buffer.to_bytes
-                else:
-                    buffer = buffer
-                    self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
-            else:
-                with open(path, "rb") as f:
-                    content = f.read()
-                    exit()
-
+            self._task_def(path, impulse_identifier)
+            pass
         return FWAction()
 
 
