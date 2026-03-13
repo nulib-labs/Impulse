@@ -255,13 +255,13 @@ class DocumentExtractionTask(FireTaskBase):
 
     def _predict(self, contents: list[dict]):
         from chandra.model import InferenceManager
-        from chandra.model.schema import BatchInputItem
+        from chandra.model.schema import BatchInputItem, BatchOutputItem
         from tqdm import tqdm
         from PIL import Image
         import io
         from itertools import batched
 
-        results = []
+        results: list[BatchOutputItem] = []
         manager = InferenceManager(method="vllm")
         logger.info(f"Now predicting data")
         for batch in tqdm(batched(contents, 8), desc="Predicting"):
@@ -337,7 +337,7 @@ class DocumentExtractionTask(FireTaskBase):
         """Save any Pydantic model to MongoDB."""
         from tqdm import tqdm
         for i, page in tqdm(enumerate(results), desc="Saving results to database"):
-            page_dict = dataclasses.asdict(page)
+            page_dict = dataclasses.asdict(page["result"])
             page_dict["filename"] = results[i]["filename"]
             page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
             page_dict["page_number"] = results[i]["page_number"]
