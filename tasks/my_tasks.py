@@ -268,9 +268,6 @@ class DocumentExtractionTask(FireTaskBase):
             for b in batch:
                 img = Image.open(io.BytesIO(b["contents"])).convert("RGB")
                 
-                # Resize while preserving aspect ratio (only downscales)
-                img.thumbnail((1024, 1024), Image.LANCZOS)
-                
                 batch_input_items: list[BatchInputItem] = [
                     BatchInputItem(
                         image=img,
