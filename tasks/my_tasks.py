@@ -189,12 +189,10 @@ class ImageProcessingTask(FireTaskBase):
         impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
         output_paths: list[tuple[str, str]] = []
 
-        with Pool(processes=None) as pool:
+        with Pool(processes=4) as pool:
             result = pool.map(partial(self._task_def, impulse_identifier=impulse_identifier), path_array)
             print(result)
-        for path in path_array:
-            self._task_def(path, impulse_identifier)
-            pass
+        logger.success("Completed mapping task.")
         return FWAction()
 
 
