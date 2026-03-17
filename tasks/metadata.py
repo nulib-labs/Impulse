@@ -190,3 +190,24 @@ Return ONLY valid JSON — no prose, no markdown fences — in exactly this shap
         return FWAction(update_spec={"document_metadata": document})
 
 
+class GetMetadata(FireTaskBase):
+    _fw_name = "Get Metadata Task"
+
+class EnrichMetadata(FireTaskBase):
+    _fw_name = "Build Enriched Manifest Task"
+class SaveManifest(FireTaskBase):
+    _fw_name = "Save Manifest To Mongo Task"
+class SummaryManifest(FireTaskBase):
+    _fw_name = "Summary Task"
+class SummaryManifest(FireTaskBase):
+    _fw_name = "Context Enrichment Task"
+class Task187(FireTaskBase):
+    _fw_name = "Aggregate OCR Task"
+class Task124(FireTaskBase):
+    _fw_name = "Fetch IIIF Collection Task"
+class IIIF(FireTaskBase):
+    _fw_name = "IIIF OCR Task"
+class IIIF(FireTaskBase):
+    _fw_name = "Benchmark Networking"
+class IIIF(FireTaskBase):
+    _fw_name = "Experimental Metadata Task"

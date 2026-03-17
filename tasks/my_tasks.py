@@ -1,6 +1,4 @@
-from multiprocessing import Pool
 from typing import NoReturn, override
-from pathlib import Path
 from cv2.typing import MatLike
 import numpy as np
 import dataclasses
@@ -15,6 +13,7 @@ import base64
 import fitz
 from tasks.helpers import parse_s3_path, get_s3_content, _get_db
 import cv2
+
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
@@ -28,10 +27,8 @@ class ImageProcessingTask(FireTaskBase):
     @staticmethod
     def _to_array(content: bytes) -> np.ndarray:
         import cv2
-
         arr = np.frombuffer(content, np.uint8)
-
-        return arr
+        return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)  # actually decode it
 
     @staticmethod
     def _binarize(arr: MatLike) -> MatLike:
@@ -90,6 +87,7 @@ class ImageProcessingTask(FireTaskBase):
             s3_path: S3 URI (e.g. s3://bucket/key)
             content: File content as a string
         """
+        logger.debug(f's3_path: {s3_path}')
         bucket, key = self.parse_s3_path(s3_path)
 
         session = boto3.Session(profile_name="impulse")
@@ -100,7 +98,7 @@ class ImageProcessingTask(FireTaskBase):
             Key=key,
             Body=content,  # Encode string as bytes
         )
-
+        logger.success(f"Successfully saved file to s3: {key}")
         return True
     
     @staticmethod
@@ -133,45 +131,12 @@ class ImageProcessingTask(FireTaskBase):
             raise RuntimeError(f"cv2.imencode failed for {filetype}")
         return buffer.tobytes(), filetype
 
-    def _task_def(self, x, impulse_identifier):
-        logger.info(f"`path` is {x}")
-        if self.is_s3_path(x):
-            filestem = Path(x.split("/")[-1])
-
-            content = get_s3_content(x)
-            raw_arr = self._to_array(content)
-            
-            if self._is_RGB(raw_arr):
-                raw_arr = self._to_grayscale(raw_arr)
-
-            bin_arr: MatLike = self._binarize(raw_arr)
-            dst_arr: MatLike = self._denoise(bin_arr)
-            buffer, filetype = self._encode_to_image(bin_arr, ".jp2")
-            output_s3_path = "/".join(
-                [
-                    "nu-impulse-production",
-                    "DATA",
-                    str(impulse_identifier).upper(),
-                    str(filestem.with_suffix(filetype)),
-                ]
-            )
-            if type(buffer) == np.ndarray:
-                buffer = buffer.to_bytes
-            else:
-                buffer = buffer
-                self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
-        else:
-            with open(x, "rb") as f:
-                content = f.read()
-                exit()
         
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
         This method runs the image processing task.
         """
-        from pathlib import Path
-        from functools import partial
         path_array_key = fw_spec.get("find_path_array_in", None)
         if not path_array_key:
             logger.critical("Critical spec keys missing. Abandoning.")
@@ -188,11 +153,38 @@ class ImageProcessingTask(FireTaskBase):
         )  # The impulse identifier can be anything that would be a valid directory name in S3
         impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
         output_paths: list[tuple[str, str]] = []
+        import cv2
+        from pathlib import Path
+        for path in path_array:
+            logger.info(f"`path` is {path}")
+            if self.is_s3_path(path):
+                filestem = Path(path.split("/")[-1])
 
-        with Pool(processes=4) as pool:
-            result = pool.map(partial(self._task_def, impulse_identifier=impulse_identifier), path_array)
-            print(result)
-        logger.success("Completed mapping task.")
+                content = get_s3_content(path)
+                
+                # Fix 1: actually decode the image
+                raw_arr = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED)
+                if raw_arr is None:
+                    logger.error(f"Failed to decode image at {path}, skipping.")
+                    continue
+
+                if self._is_RGB(raw_arr):
+                    raw_arr = self._to_grayscale(raw_arr)
+
+                bin_arr: MatLike = self._binarize(raw_arr)
+                dst_arr: MatLike = self._denoise(bin_arr)
+                buffer, filetype = self._encode_to_image(dst_arr, ".jp2")
+
+                output_s3_path = "/".join([
+                    "nu-impulse-production",
+                    "DATA",
+                    str(impulse_identifier).upper(),
+                    str(filestem.with_suffix(filetype)),
+                ])
+
+                # Fix 2: always save, buffer is already bytes
+                self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
+
         return FWAction()
 
 
