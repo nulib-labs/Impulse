@@ -1,0 +1,21 @@
+name: Image Processing Workflow
+fws:
+  - fw_id: 1
+    name: J1291_35556002974467 Document Extraction
+    spec:
+      find_path_array_in: document
+      _tasks:
+        - _fw_name: Document Extraction Task
+      document:
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_a00_L_print.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_a01_R_print.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_a1_fiche.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p1000_L_print.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p1000_fiche.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p1001_R_print.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p346_L_print.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p346_fiche.jpg
+        - s3://nu-impulse-production/J1291_35556002974467/j1291_35556002974467_p347_R_print.jpg
+      impulse_identifier: J1291_35556002974467
+links: {}
+metadata: {}
