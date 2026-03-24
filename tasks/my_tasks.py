@@ -250,35 +250,39 @@ class DocumentExtractionTask(FireTaskBase):
         return None
 
     def _predict(self, contents: list[dict]):
-        from chandra.model import InferenceManager
-        from chandra.model.schema import BatchInputItem
-        from tqdm import tqdm
-        from PIL import Image
+        from marker.converters.pdf import PdfConverter
+        from marker.models import create_model_dict
+        from marker.config.parser import ConfigParser
         import io
+        from itertools import batched
+
+        config = {"output_format": "json"}
+        config_parser = ConfigParser(config)
+
+        converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
+            artifact_dict=create_model_dict(),
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+            llm_service=config_parser.get_llm_service(),
+        )
 
         results = []
-        manager = InferenceManager(method="vllm")
-        logger.info(f"Now predicting data")
-        for content in tqdm(contents, desc="Predicting", total=int(len(contents) / 2)):
-                # Convert JP2 to JPEG-compatible RGB image
-                image = Image.open(io.BytesIO(content["contents"])).convert("RGB")
-                
-                # Save as JPEG bytes and reload to ensure JPEG format compatibility
-                jpeg_buffer = io.BytesIO()
-                image.save(jpeg_buffer, format="JPEG")
-                jpeg_buffer.seek(0)
-                
-                batch_input_items: list[BatchInputItem] = [
-                    BatchInputItem(
-                        image=Image.open(jpeg_buffer).convert("RGB"),
-                        prompt="Extract the text from this document.",
-                    )
-                ]
-                results.extend(manager.generate(batch_input_items))
-        logger.success("Predictions complete!")
-        for i, result in enumerate(results):
-            contents[i]["predictions"] = result
-        return contents
+        import json
+        contents_batches = batched(contents, 8)
+        for contents_batch in contents_batches:
+            for item in contents_batch:
+                file_input = io.BytesIO(item["contents"])
+                rendered = converter(file_input)
+
+                # Use model_json() then parse back to dict to avoid the unhashable bug
+                rendered_dict = json.loads(rendered.model_dump_json())
+
+                rendered_dict["filename"] = item["filename"]
+                rendered_dict["impulse_identifier"] = item["impulse_identifier"]
+                results.append(rendered_dict)
+
+        return results
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -330,21 +334,16 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, results, collection):
+    def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB."""
-        from tqdm import tqdm
-        for i, page in tqdm(enumerate(results), desc="Saving results to database"):
-            page_dict = dataclasses.asdict(page["predictions"])
-            page_dict["filename"] = results[i]["filename"]
-            page_dict["impulse_identifier"] = results[i]["impulse_identifier"]
-            page_dict["page_number"] = results[i]["page_number"]
+        for i, page in enumerate(model):
+            page["document_extraction_model"] = "marker"
             collection.update_one(
                 {
-                    "filename": page_dict["filename"],
-                    "impulse_identifier": page_dict["impulse_identifier"],
-                    "page_number": page_dict["page_number"],  # was incorrectly set to page_dict
+                    "page_number": i+1,
+                    "impulse_identifier": page["impulse_identifier"],
                 },
-                {"$set": page_dict},
+                {"$set": page},
                 upsert=True,
             )
         logger.success("Successfully uploaded all documents!")
