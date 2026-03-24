@@ -1,23 +1,5 @@
 name: Meow
 fws:
-  - fw_id: 1
-    name: "Image Processing"
-    spec:
-      find_path_array_in: document
-      _tasks:
-        - _fw_name: Image Processing Task
-      document:
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000001.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000002.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000003.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000004.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000005.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000006.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000007.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000008.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000009.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000010.jp2
-      impulse_identifier: P0491_35556036791515
   - fw_id: 2
     name: "Document Extraction"
     spec:
@@ -28,15 +10,6 @@ fws:
         - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000001.jp2
         - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000002.jp2
         - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000003.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000004.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000005.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000006.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000007.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000008.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000009.jp2
-        - s3://nu-impulse-production/P0491_35556036791515/JP2000/00000010.jp2
       impulse_identifier: P0491_35556036791515
-links:
-  1:
-    - 2
+links: {}
 metadata: {}
