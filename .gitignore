@@ -1,47 +1,41 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
-Nbuild/
+build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
 .venv
 
-my*.yaml
-fw_test.yaml
-*.pdf
-logs/*
-
-FW.json
-
+# Data / temp
 data/*
-*.bin
-*.pdf
-
 uploads/*
 downloaded_files/*
-.DS_Store
-pilot_testing/*
-test_image_detection.py
-debug.json
-fabfile.py
-.DS_Store
-.DS_Store
-.DS_Store
-.DS_Store
-FW_submit.script
-pilot_test_data/
-*.pkl
-logdir
-P0491*/
-Year2/
 downloaded_images/
-lost_flows
+pilot_testing/
+pilot_test_data/
+logs/*
+logdir/
+*.bin
+*.pkl
 
-scripts/
-infra/
+# OS
+.DS_Store
 
+# Environment
 .env
+.env.local
+
+# Test / coverage
 .coverage
+htmlcov/
+
+# Node (frontend)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# CDK
+infra/cdk.out/
+infra/.venv/
+infra/node_modules/

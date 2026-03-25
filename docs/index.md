@@ -1,42 +1,50 @@
-# Impulse
+# Impulse Architecture
 
-Digitization will deliver unprocessed files, I will do binarization/all that jazz
-Pass it back to Digitization, they will do limb, METSXML stuff, and then they pass it back and do OCR
+## Overview
 
-Impulse is a high-performance computing workflow manager designed primarily for running Deep Learning Document Models on Digitized Documents for Libraries and Cultural Heritage Institutions. It works on many image formats.
+Impulse is a serverless document processing pipeline running on AWS.
+Users submit jobs through a web frontend; documents are uploaded directly
+to S3 via presigned URLs and processed via Step Functions orchestrating
+ECS Fargate tasks and Lambda functions.
 
-General architecture
+## Data Flow
 
-File gets uploaded to MongoDB database. -> Supercomputing daemon triggers a compute job to remote supercomputing cluster -> remote worker returns generated text, images, etc. back into MongoDB
+1. User signs in via Cognito, creates a job via the API.
+2. Frontend gets presigned S3 upload URLs and uploads files directly to S3.
+3. API starts a Step Functions execution.
+4. Step Functions validates the job, fans out over documents using Distributed Map.
+5. Each document is routed to the appropriate processor:
+   - **Image Transform / Document Extraction** -- ECS Fargate (heavy compute)
+   - **METS, Metadata, NER, Geocode, Summaries** -- Lambda (lightweight)
+6. Results are written to MongoDB Atlas (metadata/text only -- never binary).
+7. Processed images/outputs are written back to S3.
+8. Job status is updated in MongoDB and visible in the dashboard.
 
-This allows for automation of downstream intake, such as Redivis, HathiTrust, Digital Collections, creation of IIIF manifests. Etc.
+## Key Design Decisions
 
-## Getting Started
+- **No binary data in MongoDB.** All images and documents live in S3.
+  MongoDB stores only metadata, job state, and extracted text.
+- **IAM roles for AWS auth.** No hardcoded credentials or named profiles.
+  Lambda and ECS tasks use their execution role via the default credential chain.
+- **Singleton clients.** S3 and MongoDB clients are created once per process
+  and reused across invocations (important for Lambda warm starts).
+- **Amazon Bedrock** replaces the previous local Ollama/Gemma3 dependency
+  for LLM-powered metadata extraction and summarisation.
 
-### Reading/Writing to OCR Database Programmatically
+## MongoDB Collections
 
-Get a mongodb user set up with Aerith. Backup: Aihan. Backup for backup: Anyone in IT I think.
+| Collection | Purpose | Binary data? |
+|------------|---------|--------------|
+| `jobs`     | Job records (status, progress, S3 prefixes) | No |
+| `results`  | Per-document extraction results | No |
+| `metadata` | Extracted place/people metadata | No |
 
-Review the `main.py` file in the repo. This goes through the steps of setting up a workflow and uploading your images to the database.
+## Infrastructure (CDK)
 
-You will see some success message like `Successfully added workflow...`
+The `infra/` directory contains five CDK stacks:
 
-If you get this far, nice!
-
-Now, you will need access to the Quest supercomputing center. Ask Aerith to fill out a form that gets you access to the center via SSH.
-
-You will then want to SSH into Quest, and clone this repository again and build whatever `venv` you want.
-
-Now, you can run something like `qlaunch singleshot` to add the workflow you made into the queue. If you think that the job will need a lot of time. (i.e., more than a few thousand pages), you can edit the `my_qadapter.yaml` file and edit the walltime of the job. If you think that your number of pages will exceed the 48-hour time limit, I would highly recommend simply chunking the images into chapters/sections/whatever makes sense for your data.
-
-## What do we need to do with this?
-
-Currently, the roadmap consists of first getting it done so that the entire workflow can be done from the command line with relatively little user intervention.
-
-We also need to fix rotations/deskew. My code sucks for this.
-
-Finally, we need to standardize our data model, or at least visualize it so that people do not put their brain into pretzels trying to get a foreign key relation.
-
-This is truly a project where getting 90% of the way there took 10% of the time.
-
-Get Checksum of files
+- **StorageStack** -- S3 bucket, ECR repositories
+- **NetworkStack** -- VPC, subnets, VPC endpoints (S3, Secrets Manager, ECR)
+- **AuthStack** -- Cognito User Pool and app client
+- **ProcessingStack** -- ECS cluster, Fargate task defs, Lambda functions, Step Functions state machine, SQS DLQ
+- **ApiStack** -- API Gateway REST API, Cognito authorizer, Lambda API handler

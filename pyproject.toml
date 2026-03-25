@@ -1,69 +1,65 @@
 [project]
 name = "impulse"
-version = "0.1.0"
-description = "Superscaling Document Pipelines"
+version = "0.2.0"
+description = "Serverless document processing pipeline on AWS"
 readme = "README.md"
-
-
 requires-python = ">=3.11,<3.14"
+
 dependencies = [
-  "accelerate>=1.12.0",
+  # Core
   "boto3>=1.42.2",
-  "bs4>=0.0.2",
-  "codecarbon[carbonboard]>=3.2.2",
-  "deskew>=1.5.3",
-  "fabric>=3.2.2",
-  "fireworks>=2.0.8",
-  "igraph>=1.0.0",
+  "certifi>=2024.0.0",
   "loguru>=0.7.3",
-  "lxml>=6.0.2",
-  "marker-pdf>=1.10.2",
-  "matplotlib>=3.10.6",
-  "mplcursors>=0.7",
-  "ollama>=0.6.1",
-  "opencv-python>=4.12.0.88",
-  "pandas>=2.3.3",
-  "pdf2image>=1.17.0",
-  "pillow>=10.4.0",
-  "pip>=25.3",
-  "plotly>=6.3.1",
   "pymongo>=4.15.2",
+
+  # Image processing
+  "opencv-python>=4.12.0.88",
+  "pillow>=10.4.0",
+
+  # Document extraction
+  "marker-pdf>=1.10.2",
   "pymupdf>=1.27.1",
-  "pypdf2>=3.0.1",
-  "python-doctr>=1.0.0",
-  "sentence-transformers>=5.1.1",
+  "lxml>=6.0.2",
+
+  # NLP / NER
   "spacy>=3.8.11",
-  "surya-ocr>=0.17.1",
   "transformers>=4.57.0",
+
+  # HTTP (for geocoding)
+  "requests>=2.31.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-cov>=5.0.0",
+  "moto[s3,sqs,ecs]>=5.0.0",
+  "mongomock>=4.1.0",
 ]
 
 [tool.basedpyright]
 typeCheckingMode = "basic"
 diagnosticMode = "openFilesOnly"
 useLibraryCodeForTypes = false
-incude = ["src"]
+include = ["src"]
 executionEnvironments = [{ root = "src" }]
 venvPath = "."
 venv = ".venv"
-
 exclude = [
   "**/node_modules",
   "**/__pycache__",
   "**/.venv",
-  "**/.tox",
   "**/dist",
   "**/build",
   "**/.git",
+  "infra/",
+  "frontend/",
 ]
 
-[tool.uv.sources]
-impulse = { workspace = true }
-
-[dependency-groups]
-dev = ["pytest", "pytest-cov", "moto[s3,sqs,ecs]", "mongomock"]
-
 [tool.setuptools.packages.find]
-include = ["tasks*"]
+where = ["src"]
+include = ["impulse*"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]  # tells pytest to add src/ to sys.path
+pythonpath = ["src"]
+testpaths = ["tests"]
