@@ -1,7 +1,7 @@
 [project]
 name = "impulse"
 version = "0.1.0"
-description = "Add your description here"
+description = "Superscaling Document Pipelines"
 readme = "README.md"
 
 
@@ -41,6 +41,10 @@ dependencies = [
 typeCheckingMode = "basic"
 diagnosticMode = "openFilesOnly"
 useLibraryCodeForTypes = false
+incude = ["src"]
+executionEnvironments = [{ root = "src" }]
+venvPath = "."
+venv = ".venv"
 
 exclude = [
   "**/node_modules",
@@ -56,7 +60,10 @@ exclude = [
 impulse = { workspace = true }
 
 [dependency-groups]
-dev = ["impulse"]
+dev = ["pytest", "pytest-cov", "moto[s3,sqs,ecs]", "mongomock"]
 
 [tool.setuptools.packages.find]
 include = ["tasks*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]  # tells pytest to add src/ to sys.path

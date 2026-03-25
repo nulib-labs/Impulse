@@ -42,3 +42,6 @@ lost_flows
 
 scripts/
 infra/
+
+.env
+.coverage
