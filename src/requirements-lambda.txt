@@ -1,0 +1,5 @@
+# Lightweight dependencies for the API Lambda handler.
+# boto3 is already provided by the Lambda runtime.
+loguru>=0.7.3
+pymongo>=4.15.2
+certifi>=2024.0.0

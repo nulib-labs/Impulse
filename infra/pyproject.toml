@@ -1,0 +1,9 @@
+[project]
+name = "impulse-infra"
+version = "0.1.0"
+description = "CDK infrastructure for the Impulse document pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "aws-cdk-lib>=2.170.0",
+    "constructs>=10.0.0",
+]
