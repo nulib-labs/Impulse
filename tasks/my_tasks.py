@@ -331,7 +331,7 @@ class DocumentExtractionTask(FireTaskBase):
                 buffer = io.BytesIO()
                 pil_image.save(buffer, format="WEBP")
                 
-                s3_path = f"{s3_base_path}/{impulse_id}/{page_number}/{filename}.webp"
+                s3_path = f"{s3_base_path}/{impulse_id}/{page_number:010d}/{filename}.webp"
                 self.save_to_s3(s3_path, buffer.getvalue())
                 image_keys.append(s3_path)
 
@@ -379,12 +379,13 @@ class DocumentExtractionTask(FireTaskBase):
                 "filename": filename,
                 "page_number": i,
                 "contents": get_s3_content(path),
-                "impulse_identifier": fw_spec["impulse_identifier"]
+                "impulse_identifier": fw_spec["impulse_identifier"],
+                "source_image": path
                 })
 
             results = self._predict(contents)
             print(results[0])
-            self.save_to_mongo(results, collection=_get_db()["colt"])
+            self.save_to_mongo(results, collection=_get_db()["colt"], s3_base_path="nu-impulse-production")
 
         return FWAction()
 
