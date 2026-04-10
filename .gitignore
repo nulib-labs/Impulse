@@ -7,35 +7,7 @@ wheels/
 *.egg-info
 .venv
 
-# Data / temp
-data/*
-uploads/*
-downloaded_files/*
-downloaded_images/
-pilot_testing/
-pilot_test_data/
-logs/*
-logdir/
-*.bin
-*.pkl
+.python-version
 
-# OS
-.DS_Store
-
-# Environment
-.env
-.env.local
-
-# Test / coverage
-.coverage
-htmlcov/
-
-# Node (frontend)
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-
-# CDK
-infra/cdk.out/
-infra/.venv/
-infra/node_modules/
+my_launchpad.yaml
+my_wf.yaml

@@ -1,8 +1,0 @@
-# Deps for document-extraction container.
-# marker-pdf pulls in torch, transformers, etc.
-marker-pdf>=1.10
-loguru>=0.7.3
-pymongo>=4.15
-certifi>=2024.0
-boto3>=1.42
-python-dotenv>=1.0

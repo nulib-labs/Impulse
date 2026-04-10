@@ -1,0 +1,162 @@
+{
+    "spec": {
+        "impulse_identifier": "P0491_35556036056489",
+        "s3_xml_path": "s3://nu-impulse-production/P0491_35556036056489/mets.xml",
+        "s3_yaml_path": "s3://nu-impulse-production/P0491_35556036056489/mets.yaml",
+        "_tasks": [
+            {
+                "_fw_name": "MetsXML To HathiTrust Manifest Task"
+            }
+        ]
+    },
+    "fw_id": 75657,
+    "created_on": "2026-04-10T17:39:13.425217+00:00",
+    "updated_on": "2026-04-10T17:40:55.964304+00:00",
+    "launches": [
+        {
+            "fworker": {
+                "name": "Automatically generated Worker",
+                "category": "",
+                "query": "{}",
+                "env": {}
+            },
+            "fw_id": 75657,
+            "launch_dir": "/home/ayn/Work/ImpulseSuperCompute",
+            "host": "ayn",
+            "ip": "129.105.121.177",
+            "trackers": [],
+            "action": null,
+            "state": "RUNNING",
+            "state_history": [
+                {
+                    "state": "RUNNING",
+                    "created_on": "2026-04-10T17:40:55.942792+00:00",
+                    "updated_on": "2026-04-10T17:40:55.942796+00:00"
+                }
+            ],
+            "launch_id": 74296
+        }
+    ],
+    "archived_launches": [
+        {
+            "fworker": {
+                "name": "Automatically generated Worker",
+                "category": "",
+                "query": "{}",
+                "env": {}
+            },
+            "fw_id": 75657,
+            "launch_dir": "/home/ayn/Work/ImpulseSuperCompute",
+            "host": "ayn",
+            "ip": "129.105.121.177",
+            "trackers": [],
+            "action": {
+                "stored_data": {
+                    "_message": "runtime error during task",
+                    "_task": {
+                        "_fw_name": "MetsXML To HathiTrust Manifest Task"
+                    },
+                    "_exception": {
+                        "_stacktrace": "Traceback (most recent call last):\n  File \"/home/ayn/Work/ImpulseSuperCompute/.venv/lib/python3.13/site-packages/fireworks/core/rocket.py\", line 262, in run\n    m_action = t.run_task(my_spec)\n  File \"/home/ayn/Work/ImpulseSuperCompute/tasks/mets.py\", line 244, in run_task\n    self.save_to_mongo(document, collection=\"HathiTrust\")\n    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ayn/Work/ImpulseSuperCompute/tasks/mets.py\", line 220, in save_to_mongo\n    result = col.update_one(\n             ^^^^^^^^^^^^^^\nAttributeError: 'str' object has no attribute 'update_one'\n",
+                        "_details": null
+                    }
+                },
+                "exit": true,
+                "update_spec": {},
+                "mod_spec": [],
+                "additions": [],
+                "detours": [],
+                "append_wfs": [],
+                "defuse_children": false,
+                "defuse_workflow": false,
+                "propagate": false
+            },
+            "state": "FIZZLED",
+            "state_history": [
+                {
+                    "state": "RUNNING",
+                    "created_on": "2026-04-10T17:39:22.163175+00:00",
+                    "updated_on": "2026-04-10T17:39:23.585395+00:00",
+                    "checkpoint": {
+                        "_task_n": 0,
+                        "_all_stored_data": {},
+                        "_all_update_spec": {},
+                        "_all_mod_spec": []
+                    }
+                },
+                {
+                    "state": "FIZZLED",
+                    "created_on": "2026-04-10T17:39:23.627120+00:00",
+                    "checkpoint": {
+                        "_task_n": 0,
+                        "_all_stored_data": {},
+                        "_all_update_spec": {},
+                        "_all_mod_spec": []
+                    }
+                }
+            ],
+            "launch_id": 74294
+        },
+        {
+            "fworker": {
+                "name": "Automatically generated Worker",
+                "category": "",
+                "query": "{}",
+                "env": {}
+            },
+            "fw_id": 75657,
+            "launch_dir": "/home/ayn/Work/ImpulseSuperCompute",
+            "host": "ayn",
+            "ip": "129.105.121.177",
+            "trackers": [],
+            "action": {
+                "stored_data": {
+                    "_message": "runtime error during task",
+                    "_task": {
+                        "_fw_name": "MetsXML To HathiTrust Manifest Task"
+                    },
+                    "_exception": {
+                        "_stacktrace": "Traceback (most recent call last):\n  File \"/home/ayn/Work/ImpulseSuperCompute/.venv/lib/python3.13/site-packages/fireworks/core/rocket.py\", line 262, in run\n    m_action = t.run_task(my_spec)\n  File \"/home/ayn/Work/ImpulseSuperCompute/tasks/mets.py\", line 246, in run_task\n    self.save_to_mongo(document, collection=\"HathiTrust\")\n    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ayn/Work/ImpulseSuperCompute/tasks/mets.py\", line 222, in save_to_mongo\n    result = col.update_one(\n             ^^^^^^^^^^^^^^\nAttributeError: 'str' object has no attribute 'update_one'\n",
+                        "_details": null
+                    }
+                },
+                "exit": true,
+                "update_spec": {},
+                "mod_spec": [],
+                "additions": [],
+                "detours": [],
+                "append_wfs": [],
+                "defuse_children": false,
+                "defuse_workflow": false,
+                "propagate": false
+            },
+            "state": "FIZZLED",
+            "state_history": [
+                {
+                    "state": "RUNNING",
+                    "created_on": "2026-04-10T17:40:30.492171+00:00",
+                    "updated_on": "2026-04-10T17:40:31.413717+00:00",
+                    "checkpoint": {
+                        "_task_n": 0,
+                        "_all_stored_data": {},
+                        "_all_update_spec": {},
+                        "_all_mod_spec": []
+                    }
+                },
+                {
+                    "state": "FIZZLED",
+                    "created_on": "2026-04-10T17:40:31.464442+00:00",
+                    "checkpoint": {
+                        "_task_n": 0,
+                        "_all_stored_data": {},
+                        "_all_update_spec": {},
+                        "_all_mod_spec": []
+                    }
+                }
+            ],
+            "launch_id": 74295
+        }
+    ],
+    "state": "RUNNING",
+    "name": "Unnamed FW"
+}
