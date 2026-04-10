@@ -7,6 +7,8 @@ from pymongo import MongoClient
 import os
 import certifi
 
+from tasks import config
+
 def parse_s3_path(s3_path: str) -> tuple[str, str]:
     """
     Parse S3 path into bucket and key.
@@ -49,9 +51,7 @@ def get_s3_content(s3_path: str):
     new_w = 800
     new_h = int(h * (new_w / w))
     out = image.resize((new_w, new_h), Image.LANCZOS)
-    print(out.size)
-    out.show()
-    return image
+    return out
 
 def get_s3_text(s3_path: str):
     """
@@ -73,7 +73,7 @@ def get_s3_text(s3_path: str):
 
 def _get_db():
     client = MongoClient(
-        os.getenv("MONGODB_OCR_DEVELOPMENT_CONN_STRING_IMPULSE"),
+        config.MONGO_URI,
         tls=True,
         tlsCAFile=certifi.where(),
     )
