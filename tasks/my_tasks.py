@@ -13,7 +13,6 @@ from tasks.helpers import _get_db, get_s3_content
 from dataclasses import asdict
 from pymongo import UpdateOne
 import io
-import base64
 
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
