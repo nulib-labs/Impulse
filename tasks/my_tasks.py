@@ -314,36 +314,43 @@ class DocumentExtractionTask(FireTaskBase):
         return img
 
 
-    def save_to_mongo(self, model, collection):
-        """Save any Pydantic model to MongoDB."""
+    def save_to_mongo(self, model, collection, s3_base_path: str):
+        """Save any Pydantic model to MongoDB, with images stored in S3.
+        
+        Args:
+            s3_base_path: S3 URI prefix e.g. s3://your-bucket/images
+        """
         operations = []
         for i, page in enumerate(model):
             page = page.copy()
-            
-            # Convert PIL images to base64
-            images_b64 = {}
+            impulse_id = page["impulse_identifier"]
+            page_number = page["page_number"]
+
+            image_keys = []
             for filename, pil_image in page.pop("images", {}).items():
                 buffer = io.BytesIO()
-                pil_image.save(buffer, format="PNG")
-                images_b64[filename] = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            
-            page["images"] = images_b64
+                pil_image.save(buffer, format="WEBP")
+                
+                s3_path = f"{s3_base_path}/{impulse_id}/{page_number}/{filename}.webp"
+                self.save_to_s3(s3_path, buffer.getvalue())
+                image_keys.append(s3_path)
+
+            page["images"] = image_keys
             page["document_extraction_model"] = "chandra"
 
             operations.append(
                 UpdateOne(
                     {
-                        "page_number": i + 1,
-                        "impulse_identifier": page["impulse_identifier"],
+                        "page_number": page_number,
+                        "impulse_identifier": impulse_id,
                     },
                     {"$set": page},
                     upsert=True,
                 )
             )
-        
+
         if operations:
             collection.bulk_write(operations)
-
         logger.success("Successfully uploaded all documents!")
         return True
 
