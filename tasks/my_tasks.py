@@ -249,6 +249,28 @@ class DocumentExtractionTask(FireTaskBase):
 
         return None
 
+    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
+        """
+        Save string content to S3.
+
+        Args:
+            s3_path: S3 URI (e.g. s3://bucket/key)
+            content: File content as a string
+        """
+        logger.debug(f's3_path: {s3_path}')
+        bucket, key = self.parse_s3_path(s3_path)
+
+        session = boto3.Session(profile_name="impulse")
+        s3_client = session.client("s3")
+
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content,  # Encode string as bytes
+        )
+        logger.success(f"Successfully saved file to s3: {key}")
+        return True
+    
     def _predict(self, contents: list[dict]):
 
         manager = InferenceManager(method="vllm")
