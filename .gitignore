@@ -10,6 +10,10 @@ wheels/
 .python-version
 
 my_launchpad.yaml
+my_launchpad.prod.yaml
 my_wf.yaml
+my_qadapter.yaml
 
 FW.json
+
+scripts/.env
