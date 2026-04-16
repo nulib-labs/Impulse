@@ -2,18 +2,15 @@ import re
 from typing import override
 from uuid import uuid4
 import boto3
-from chandra.model.schema import BatchInputItem
 import cv2
 from cv2.typing import MatLike
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 import numpy as np
-from chandra.model import InferenceManager
-from tasks.helpers import _get_db, get_s3_content
-from dataclasses import asdict
+from tasks.helpers import _get_db, funcs, get_s3_content
 from pymongo import UpdateOne
 import io
-
+import json
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
     @staticmethod
@@ -270,20 +267,24 @@ class DocumentExtractionTask(FireTaskBase):
         logger.success(f"Successfully saved file to s3: {key}")
         return True
     
-    def _predict(self, contents: list[dict]):
+    def _predict(self, contents):
+        from marker.converters.pdf import PdfConverter
+        from marker.models import create_model_dict
+        from marker.config.parser import ConfigParser
 
-        manager = InferenceManager(method="vllm")
-        output: list[dict] = []
-        batch: list[BatchInputItem] = [BatchInputItem(image=i["contents"], prompt_type="ocr_layout") for i in contents] # Define a batch as a list of InputItems for Chandra
-        results = manager.generate(batch) # Generate the results
-        for i, item in enumerate(results): # Generate a rendered dictionary
-            rendered_dict = asdict(item)
-            rendered_dict["filename"] = contents[i]["filename"]
-            rendered_dict["page_number"] = contents[i]["page_number"]
-            rendered_dict["impulse_identifier"] = contents[i]["impulse_identifier"]
-            output.append(rendered_dict)
+        config = {"output_format": "json"}
+        config_parser = ConfigParser(config)
 
-        return output
+        converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
+            artifact_dict=create_model_dict(),
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+            llm_service=config_parser.get_llm_service(),
+        )
+        rendered = []
+        rendered = converter(io.BytesIO(contents))
+        return rendered
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -343,27 +344,11 @@ class DocumentExtractionTask(FireTaskBase):
         """
         operations = []
         for i, page in enumerate(model):
-            page = page.copy()
-            impulse_id = page["impulse_identifier"]
-            page_number = page["page_number"]
-
-            image_keys = []
-            for filename, pil_image in page.pop("images", {}).items():
-                buffer = io.BytesIO()
-                pil_image.save(buffer, format="WEBP")
-                
-                s3_path = f"{s3_base_path}/{impulse_id}/{page_number:010d}/{filename}.webp"
-                self.save_to_s3(s3_path, buffer.getvalue())
-                image_keys.append(s3_path)
-
-            page["images"] = image_keys
-            page["document_extraction_model"] = "chandra"
-
             operations.append(
                 UpdateOne(
                     {
-                        "page_number": page_number,
-                        "impulse_identifier": impulse_id,
+                        "page_number": page["page_number"],
+                        "impulse_identifier": page["impulse_identifier"],
                     },
                     {"$set": page},
                     upsert=True,
@@ -396,17 +381,16 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info(f"Filename: {filename}")
                 # Get content from S3
                 logger.info("Now loading content from S3")
+                image_bytes = get_s3_content(path)
                 contents.append({
                 "filename": filename,
                 "page_number": i,
-                "contents": get_s3_content(path),
                 "impulse_identifier": fw_spec["impulse_identifier"],
-                "source_image": path
+                "source_image": path,
+                "extraction_model": "marker",
+                "extracted_data": funcs.stringify_keys(json.loads(self._predict(image_bytes).model_dump_json()))
                 })
-
-            results = self._predict(contents)
-            print(results[0])
-            self.save_to_mongo(results, collection=_get_db()["colt"], s3_base_path="nu-impulse-production")
+            self.save_to_mongo(contents, collection=_get_db()["colt"], s3_base_path="nu-impulse-production")
 
         return FWAction()
 

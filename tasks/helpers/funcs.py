@@ -1,13 +1,10 @@
 import re
-from PIL import Image
-import numpy as np
 import boto3
 from io import BytesIO
 from pymongo import MongoClient
-import os
 import certifi
-
 from tasks import config
+
 
 def parse_s3_path(s3_path: str) -> tuple[str, str]:
     """
@@ -27,31 +24,27 @@ def parse_s3_path(s3_path: str) -> tuple[str, str]:
     key = parts[1] if len(parts) > 1 else ""
     return bucket, key
 
-
-def get_s3_content(s3_path: str):
+def get_s3_content(s3_path: str) -> bytes:
     """
-    Retrieve content from S3 as a PIL Image.
-    
+    Retrieve content from S3.
+
     Args:
         s3_path: S3 URI
-    
+
     Returns:
-        PIL Image object
+        File content as bytes
     """
     bucket, key = parse_s3_path(s3_path)
+
     session = boto3.Session(profile_name="impulse")
     s3_client = session.client("s3")
 
+    # Download file content
     buffer = BytesIO()
     s3_client.download_fileobj(bucket, key, buffer)
     buffer.seek(0)
-    from PIL import Image
-    image = Image.open(buffer)
-    w, h = image.size
-    new_w = 800
-    new_h = int(h * (new_w / w))
-    out = image.resize((new_w, new_h), Image.LANCZOS)
-    return out
+
+    return buffer.read()
 
 def get_s3_text(s3_path: str):
     """
@@ -79,3 +72,10 @@ def _get_db():
     )
     db = client["praxis"]
     return db
+
+def stringify_keys(obj):
+    if isinstance(obj, dict):
+        return {str(k): stringify_keys(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return {str(i): stringify_keys(v) for i, v in enumerate(obj)}
+    return obj

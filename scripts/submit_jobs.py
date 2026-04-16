@@ -15,7 +15,7 @@ else:
     MONGO_URI = os.getenv("IMPULSE_MONGODB_URI")
 
 out = subprocess.Popen(
-    ["aws", "s3", "ls", "--profile", "myprofile", "s3://nu-impulse-production"],
+    ["aws", "s3", "ls", "--profile", "impulse", "s3://nu-impulse-production"],
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
 )
@@ -27,6 +27,7 @@ else:
     output = stdout.decode("utf-8").splitlines()
     output = [i.strip().replace("PRE ", "") for i in output if i.strip()]
 print(MONGO_URI)
+z = 0
 for i in output:
     if "DATA" in i or i.startswith("J"):
         continue
@@ -35,10 +36,9 @@ for i in output:
         uri_mode=True,
         host=MONGO_URI,
         name="fireworks",
-        mongoclient_kwargs={"tlsCAFile": "/etc/ssl/certs/ca-bundle.crt"},
     )
 
-    session = boto3.Session(profile_name="myprofile")
+    session = boto3.Session(profile_name="impulse")
     client = session.client("s3", region_name="us-west-2")
     paginator = client.get_paginator("list_objects_v2")
     operation_parameters = {
@@ -68,17 +68,9 @@ for i in output:
         name="Document Extraction Workflow",
     )
 
-    mets_fw: Firework = Firework(
-        METSXMLToHathiTrustManifestTask(),
-        spec={
-            "impulse_identifier": {i.replace("/", "")},
-            "s3_xml_path": xml_key,
-            "s3_yaml_path": xml_key.replace(".xml", ".yaml"),
-        },
-    )
-
-    wf: Workflow = Workflow([ocr_fw, mets_fw])
 
     launchpad.add_wf(ocr_fw)
 
-    break
+    z += 1
+    if z == 3:
+        break
