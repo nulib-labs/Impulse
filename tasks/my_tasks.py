@@ -201,7 +201,7 @@ class EmbeddingTask(FireTaskBase):
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(
-            "Qwen/Qwen3-Embedding-8B",
+            "Qwen/Qwen3-Embedding-0.6B",
             device="cuda",
             model_kwargs={"torch_dtype": "float16"},
         )
