@@ -14,6 +14,7 @@ from pymongo import UpdateOne
 import io
 import json
 from pymongo import MongoClient
+from bs4 import BeautifulSoup
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
@@ -23,17 +24,31 @@ class EmbeddingTask(FireTaskBase):
 
     def extract_sentences(self, text_values: list[str]) -> list[str]:
         sentences = []
+
         for fragment in text_values:
-            fragment = re.sub(r"<[^>]+>", " ", fragment)
-            fragment = re.sub(r"<math[^>]*>.*?</math>", " ", fragment, flags=re.DOTALL)
-            fragment = re.sub(r"\s+", " ", fragment).strip()
+            # Parse HTML safely
+            soup = BeautifulSoup(fragment, "html.parser")
 
-            if not fragment:
-                continue
-            if not re.search(r"[a-zA-Z]{4,}", fragment):
+            # Remove unwanted tags entirely
+            for tag in soup(["math", "script", "style"]):
+                tag.decompose()
+
+            # Extract clean text
+            text = soup.get_text(separator=" ", strip=True)
+
+            # Normalize whitespace
+            text = re.sub(r"\s+", " ", text)
+
+            if not text:
                 continue
 
-            splits = SENTENCE_SPLIT.split(fragment)
+            # Skip garbage / very short / non-language fragments
+            if not re.search(r"[a-zA-Z]{4,}", text):
+                continue
+
+            # Sentence splitting
+            splits = SENTENCE_SPLIT.split(text)
+
             for s in splits:
                 s = s.strip()
                 if len(s) > 20:
