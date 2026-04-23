@@ -103,7 +103,7 @@ class EmbeddingTask(FireTaskBase):
     def embed(self, items):
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer("Qwen/Qwen3-Embedding-8B", device="cuda")
+        model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", device="cuda")
 
         sentences = [x["sentence"] for x in items]
         embeddings = model.encode(sentences, show_progress_bar=True)
