@@ -1,172 +1,254 @@
+import io
+import json
 import re
 from typing import override
 from uuid import uuid4
+
 import boto3
+from bs4 import BeautifulSoup
 import certifi
 import cv2
 from cv2.typing import MatLike
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 import numpy as np
+from pymongo import UpdateOne
+from pymongo import MongoClient
+
+from blingfire import text_to_sentences
 from tasks import config
 from tasks.helpers import _get_db, funcs, get_s3_content
-from pymongo import UpdateOne
-import io
-import json
-from pymongo import MongoClient
-from bs4 import BeautifulSoup
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
+
+
+SENTENCE_FILTER = re.compile(r"[a-zA-Z]{4,}")
 
 
 class EmbeddingTask(FireTaskBase):
     _fw_name = "Embedding Task"
 
-    def extract_sentences(self, text_values: list[str]) -> list[str]:
-        sentences = []
+    # ----------------------------
+    # HTML CLEANING
+    # ----------------------------
+    def clean_html(self, html: str) -> str:
+        soup = BeautifulSoup(html, "html.parser")
 
-        for fragment in text_values:
-            # Parse HTML safely
-            soup = BeautifulSoup(fragment, "html.parser")
+        for tag in soup(["math", "script", "style"]):
+            tag.decompose()
 
-            # Remove unwanted tags entirely
-            for tag in soup(["math", "script", "style"]):
-                tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+        return re.sub(r"\s+", " ", text)
 
-            # Extract clean text
-            text = soup.get_text(separator=" ", strip=True)
+    # ----------------------------
+    # EXTRACT ORDERED STREAM
+    # ----------------------------
+    def extract_stream(self, impulse_identifier: str, coll):
+        cursor = coll.find({"impulse_identifier": impulse_identifier}).sort(
+            "page_number", 1
+        )
 
-            # Normalize whitespace
-            text = re.sub(r"\s+", " ", text)
+        stream = []
 
-            if not text:
-                continue
+        for doc in cursor:
+            page_number = doc["page_number"]
 
-            # Skip garbage / very short / non-language fragments
-            if not re.search(r"[a-zA-Z]{4,}", text):
-                continue
+            html_blocks = self.find_text_values(doc.get("extracted_data", {}))
 
-            # Sentence splitting
-            splits = SENTENCE_SPLIT.split(text)
+            for html in html_blocks:
+                if not html:
+                    continue
 
-            for s in splits:
-                s = s.strip()
-                if len(s) > 20:
-                    sentences.append(s)
+                cleaned = self.clean_html(html)
+
+                if not cleaned:
+                    continue
+
+                if not SENTENCE_FILTER.search(cleaned):
+                    continue
+
+                stream.append((page_number, cleaned))
+
+        return stream
+
+    # ----------------------------
+    # BUILD FULL DOCUMENT
+    # ----------------------------
+    def build_document(self, stream):
+        full_text_parts = []
+        char_map = []
+
+        cursor = 0
+
+        for page_number, text in stream:
+            start = cursor
+            full_text_parts.append(text)
+
+            cursor += len(text) + 1
+
+            char_map.append((start, cursor, page_number))
+
+        full_text = " ".join(full_text_parts)
+        full_text = re.sub(r"\s+", " ", full_text)
+
+        return full_text, char_map
+
+    # ----------------------------
+    # SENTENCE SPLITTING (BLINGFIRE)
+    # ----------------------------
+    def split_sentences(self, text: str):
+        raw = text_to_sentences(text).split("\n")
+
+        sentences = [
+            s.strip() for s in raw if len(s.strip()) > 20 and SENTENCE_FILTER.search(s)
+        ]
 
         return sentences
 
-    def find_text_values(self, d, results=None):
-        if results is None:
-            results = []
+    # ----------------------------
+    # FIX BROKEN SENTENCES (PAGE SPLITS)
+    # ----------------------------
+    def merge_broken_sentences(self, sentences):
+        merged = []
 
-        if isinstance(d, dict):
-            for key, value in d.items():
-                if key == "html" and isinstance(value, str) and value.strip():
-                    results.append(value)
-                else:
-                    self.find_text_values(value, results)
+        for s in sentences:
+            if not merged:
+                merged.append(s)
+                continue
 
-        elif isinstance(d, list):
-            for item in d:
-                self.find_text_values(item, results)
+            prev = merged[-1]
 
-        return results
+            if not re.search(r'[.!?]["\']?$', prev):
+                merged[-1] = prev + " " + s
+            elif s and s[0].islower():
+                merged[-1] = prev + " " + s
+            else:
+                merged.append(s)
 
-    # -----------------------------
-    # Data extraction with page_number
-    # -----------------------------
-    def get_documents(self, impulse_identifier: str, coll):
-        cursor = coll.find(
-            {"impulse_identifier": impulse_identifier},
-            {"page_number": 1, "extracted_data": 1},
-        )
+        return merged
 
+    # ----------------------------
+    # MAP SENTENCES TO PAGES
+    # ----------------------------
+    def map_pages(self, sentences, full_text, char_map):
         results = []
+        cursor = 0
 
-        for doc in cursor:
-            page_number = doc.get("page_number")
-            text_values = self.find_text_values(doc)
-            sentences = self.extract_sentences(text_values)
+        for sentence in sentences:
+            idx = full_text.find(sentence, cursor)
+            if idx == -1:
+                continue
 
-            for i, sentence in enumerate(sentences):
-                results.append(
-                    {
-                        "impulse_identifier": impulse_identifier,
-                        "page_number": page_number,
-                        "sentence": sentence,
-                        "chunk_index": i,  # useful for ordering later
-                    }
-                )
+            end = idx + len(sentence)
+            cursor = end
 
-        print(f"Extracted {len(results)} sentences")
+            page = None
+            for s, e, p in char_map:
+                if s <= idx < e:
+                    page = p
+                    break
+
+            results.append(
+                {
+                    "sentence": sentence,
+                    "page_number": page,
+                }
+            )
+
         return results
 
-    # -----------------------------
-    # Embedding
-    # -----------------------------
+    # ----------------------------
+    # MAIN PIPELINE
+    # ----------------------------
+    def get_documents(self, impulse_identifier: str, coll):
+        stream = self.extract_stream(impulse_identifier, coll)
 
-    def embed(self, items, batch_size: int = 512):
+        full_text, char_map = self.build_document(stream)
+
+        sentences = self.split_sentences(full_text)
+        sentences = self.merge_broken_sentences(sentences)
+
+        mapped = self.map_pages(sentences, full_text, char_map)
+
+        logger.info(f"Extracted {len(mapped)} sentences")
+        return mapped
+
+    # ----------------------------
+    # EMBEDDING (BATCH SAFE)
+    # ----------------------------
+    def embed(self, items, batch_size: int = 128):
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", device="cuda")
+        model = SentenceTransformer(
+            "Qwen/Qwen3-Embedding-8B",
+            device="cuda",
+            model_kwargs={"torch_dtype": "float16"},
+        )
 
         sentences = [x["sentence"] for x in items]
-        all_embeddings = []
+        embeddings = []
 
         for i in range(0, len(sentences), batch_size):
             batch = sentences[i : i + batch_size]
 
-            embeddings = model.encode(
-                batch, show_progress_bar=True, convert_to_numpy=True
+            emb = model.encode(
+                batch,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                show_progress_bar=True,
             )
 
-            all_embeddings.extend(embeddings)
+            embeddings.extend(emb)
 
-        # attach embeddings back to items
-        for item, emb in zip(items, all_embeddings):
+        for item, emb in zip(items, embeddings):
             item["embedding"] = emb.tolist()
 
-        print(f"Embedded {len(items)} sentences in batches of {batch_size}")
         return items
 
-    # -----------------------------
-    # Storage
-    # -----------------------------
-    def store_embeddings(self, items, coll):
-        if not items:
-            return
+    # ----------------------------
+    # STORE EMBEDDINGS
+    # ----------------------------
+    def store(self, items, coll):
+        ops = []
 
-        coll.insert_many(items)
-        print(f"Stored {len(items)} embeddings")
+        for item in items:
+            ops.append(
+                UpdateOne(
+                    {
+                        "impulse_identifier": item.get("impulse_identifier"),
+                        "sentence": item["sentence"],
+                    },
+                    {"$set": item},
+                    upsert=True,
+                )
+            )
 
-    # -----------------------------
-    # Main task
-    # -----------------------------
+        if ops:
+            coll.bulk_write(ops)
+
+        logger.success(f"Stored {len(ops)} embeddings")
+
+    # ----------------------------
+    # FIREWORK ENTRYPOINT
+    # ----------------------------
     @override
     def run_task(self, fw_spec: dict) -> FWAction:
         client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
         db = client["praxis"]
 
         impulse_identifier = fw_spec.get("impulse_identifier")
+        if not impulse_identifier:
+            raise ValueError("Missing impulse_identifier")
 
-        if not isinstance(impulse_identifier, str):
-            raise ValueError("impulse_identifier must be a string")
+        items = self.get_documents(impulse_identifier, coll=db["colt"])
 
-        source_coll = db["colt"]
-        target_coll = db["embeddings"]
+        # attach metadata
+        for i in items:
+            i["impulse_identifier"] = impulse_identifier
 
-        # Step 1: extract sentences WITH page numbers
-        items = self.get_documents(impulse_identifier, source_coll)
+        items = self.embed(items, batch_size=128)
 
-        if not items:
-            return FWAction(stored_data={"num_embeddings": 0})
-
-        # Step 2: embed
-        items = self.embed(items)
-
-        # Step 3: store
-        self.store_embeddings(items, target_coll)
+        self.store(items, coll=db["embeddings"])
 
         return FWAction(stored_data={"num_embeddings": len(items)})
 
