@@ -62,10 +62,8 @@ class EmbeddingTask(FireTaskBase):
 
         if isinstance(d, dict):
             for key, value in d.items():
-                if key == "text":
+                if key == "html" and isinstance(value, str) and value.strip():
                     results.append(value)
-                elif key == "chars":
-                    continue
                 else:
                     self.find_text_values(value, results)
 
