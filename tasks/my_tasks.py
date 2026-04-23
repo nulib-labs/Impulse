@@ -2,15 +2,133 @@ import re
 from typing import override
 from uuid import uuid4
 import boto3
+import certifi
 import cv2
 from cv2.typing import MatLike
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 import numpy as np
+from tasks import config
 from tasks.helpers import _get_db, funcs, get_s3_content
 from pymongo import UpdateOne
 import io
 import json
+
+SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
+
+
+class EmbeddingTask(FireTaskBase):
+    _fw_name = "Embedding Task"
+
+    def extract_sentences(self, text_values: list[str]) -> list[str]:
+        sentences = []
+        for fragment in text_values:
+            fragment = re.sub(r"<[^>]+>", " ", fragment)
+            fragment = re.sub(r"<math[^>]*>.*?</math>", " ", fragment, flags=re.DOTALL)
+            fragment = re.sub(r"\s+", " ", fragment).strip()
+            if not fragment:
+                continue
+            if not re.search(r"[a-zA-Z]{4,}", fragment):
+                continue
+            splits = SENTENCE_SPLIT.split(fragment)
+            for s in splits:
+                s = s.strip()
+                if len(s) > 20:
+                    sentences.append(s)
+        return sentences
+
+    def find_text_values(self, d, results=None):
+        if results is None:
+            results = []
+        if isinstance(d, dict):
+            for key, value in d.items():
+                if key == "text":
+                    results.append(value)
+                elif key == "chars":
+                    continue
+                else:
+                    self.find_text_values(value, results)
+        elif isinstance(d, list):
+            for item in d:
+                self.find_text_values(item, results)
+        return results
+
+    def get_documents(self, impulse_identifier: str, coll) -> list[str]:
+        cursor = coll.find({"impulse_identifier": impulse_identifier})
+        all_sentences = []
+        for doc in cursor:
+            text_values = self.find_text_values(doc)
+            sentences = self.extract_sentences(text_values)
+            all_sentences.extend(sentences)
+        print(f"Extracted {len(all_sentences)} sentences")
+        return all_sentences
+
+    def embed(self, sentences: list[str]) -> list[list[float]]:
+        from vllm import LLM
+
+        model = LLM(
+            model="Qwen/Qwen3-Embedding-8B",
+            task="embed",
+            enforce_eager=True,
+        )
+        outputs = model.embed(sentences)
+        embeddings = [output.outputs.embedding for output in outputs]
+        print(f"Embedded {len(embeddings)} sentences, dimension: {len(embeddings[0])}")
+        return embeddings
+
+    def store_embeddings(
+        self,
+        impulse_identifier: str,
+        sentences: list[str],
+        embeddings: list[list[float]],
+        coll,
+    ) -> None:
+        docs = [
+            {
+                "impulse_identifier": impulse_identifier,
+                "sentence": sentence,
+                "embedding": embedding,
+            }
+            for sentence, embedding in zip(sentences, embeddings)
+        ]
+        result = coll.insert_many(docs)
+        print(f"Stored {len(result.inserted_ids)} embeddings")
+
+    @override
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        from pymongo import MongoClient
+        import certifi
+
+        client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
+        db = client["praxis"]
+
+        impulse_identifier: str | None = fw_spec.get("impulse_identifier", None)
+        if not isinstance(impulse_identifier, str):
+            exit(1)
+
+        sentences = self.get_documents(impulse_identifier, coll=db["colt"])
+        embeddings = self.embed(sentences)
+        self.store_embeddings(
+            impulse_identifier, sentences, embeddings, coll=db["embeddings"]
+        )
+
+        return FWAction(stored_data={"num_embeddings": len(embeddings)})
+
+    @override
+    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
+        from pymongo import MongoClient
+        import certifi
+
+        client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
+        db = client["praxis"]
+        coll = db["colt"]
+
+        impulse_identifier: str | None = fw_spec.get("impulse_identifier", None)
+        if not isinstance(impulse_identifier, str):
+            exit(1)
+
+        sentences = self.get_documents(impulse_identifier, coll)
+        print(sentences)
 
 
 class ImageProcessingTask(FireTaskBase):
