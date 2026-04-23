@@ -73,7 +73,7 @@ class EmbeddingTask(FireTaskBase):
 
         for doc in cursor:
             page_number = doc.get("page_number")
-
+            print(doc)
             text_values = self.find_text_values(doc)
             sentences = self.extract_sentences(text_values)
 
