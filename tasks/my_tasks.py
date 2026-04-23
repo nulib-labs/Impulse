@@ -197,7 +197,7 @@ class EmbeddingTask(FireTaskBase):
     # ----------------------------
     # EMBEDDING (BATCH SAFE)
     # ----------------------------
-    def embed(self, items, batch_size: int = 128):
+    def embed(self, items, batch_size: int = 32):
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(
