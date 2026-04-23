@@ -121,14 +121,16 @@ class EmbeddingTask(FireTaskBase):
 
         client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
         db = client["praxis"]
-        coll = db["colt"]
 
         impulse_identifier: str | None = fw_spec.get("impulse_identifier", None)
         if not isinstance(impulse_identifier, str):
             exit(1)
 
-        sentences = self.get_documents(impulse_identifier, coll)
-        print(sentences)
+        sentences = self.get_documents(impulse_identifier, coll=db["colt"])
+        embeddings = self.embed(sentences)
+        self.store_embeddings(
+            impulse_identifier, sentences, embeddings, coll=db["embeddings"]
+        )
 
 
 class ImageProcessingTask(FireTaskBase):
