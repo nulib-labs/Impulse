@@ -8,16 +8,11 @@ from cv2.typing import MatLike
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 import numpy as np
-from tasks import config
 from tasks.helpers import _get_db, funcs, get_s3_content
 from pymongo import UpdateOne
 import io
 import json
-import re
-from typing import override
-from fireworks.core.firework import FWAction, FireTaskBase
 from pymongo import MongoClient
-import certifi
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
