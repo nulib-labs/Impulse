@@ -31,6 +31,27 @@ class EmbeddingTask(FireTaskBase):
     # ----------------------------
     # HTML CLEANING
     # ----------------------------
+    #
+    def find_text_values(self, d, results=None):
+        """
+        Recursively extract HTML strings from extracted_data tree.
+        """
+        if results is None:
+            results = []
+
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if k == "html" and isinstance(v, str) and v.strip():
+                    results.append(v)
+                else:
+                    self.find_text_values(v, results)
+
+        elif isinstance(d, list):
+            for item in d:
+                self.find_text_values(item, results)
+
+        return results
+
     def clean_html(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
 
