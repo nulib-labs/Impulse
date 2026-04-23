@@ -64,17 +64,12 @@ class EmbeddingTask(FireTaskBase):
         return all_sentences
 
     def embed(self, sentences: list[str]) -> list[list[float]]:
-        from vllm import LLM
+        from sentence_transformers import SentenceTransformer
 
-        model = LLM(
-            model="Qwen/Qwen3-Embedding-8B",
-            task="embed",
-            enforce_eager=True,
-        )
-        outputs = model.embed(sentences)
-        embeddings = [output.outputs.embedding for output in outputs]
-        print(f"Embedded {len(embeddings)} sentences, dimension: {len(embeddings[0])}")
-        return embeddings
+        model = SentenceTransformer("Qwen/Qwen3-Embedding-8B", device="cuda")
+        embeddings = model.encode(sentences, show_progress_bar=True)
+        print(f"Embedded {len(embeddings)} sentences, dimension: {embeddings.shape[1]}")
+        return embeddings.tolist()
 
     def store_embeddings(
         self,
