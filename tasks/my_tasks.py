@@ -106,7 +106,7 @@ class EmbeddingTask(FireTaskBase):
     # Embedding
     # -----------------------------
 
-    def embed(self, items, batch_size: int = 128):
+    def embed(self, items, batch_size: int = 512):
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", device="cuda")
