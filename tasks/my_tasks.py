@@ -86,7 +86,6 @@ class EmbeddingTask(FireTaskBase):
 
         for doc in cursor:
             page_number = doc.get("page_number")
-            print(doc)
             text_values = self.find_text_values(doc)
             sentences = self.extract_sentences(text_values)
 
@@ -106,18 +105,29 @@ class EmbeddingTask(FireTaskBase):
     # -----------------------------
     # Embedding
     # -----------------------------
-    def embed(self, items):
+
+    def embed(self, items, batch_size: int = 128):
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B", device="cuda")
 
         sentences = [x["sentence"] for x in items]
-        embeddings = model.encode(sentences, show_progress_bar=True)
+        all_embeddings = []
 
-        for item, emb in zip(items, embeddings):
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i : i + batch_size]
+
+            embeddings = model.encode(
+                batch, show_progress_bar=True, convert_to_numpy=True
+            )
+
+            all_embeddings.extend(embeddings)
+
+        # attach embeddings back to items
+        for item, emb in zip(items, all_embeddings):
             item["embedding"] = emb.tolist()
 
-        print(f"Embedded {len(items)} sentences")
+        print(f"Embedded {len(items)} sentences in batches of {batch_size}")
         return items
 
     # -----------------------------
