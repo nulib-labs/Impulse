@@ -13,6 +13,11 @@ from tasks.helpers import _get_db, funcs, get_s3_content
 from pymongo import UpdateOne
 import io
 import json
+import re
+from typing import override
+from fireworks.core.firework import FWAction, FireTaskBase
+from pymongo import MongoClient
+import certifi
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
@@ -20,26 +25,33 @@ SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 class EmbeddingTask(FireTaskBase):
     _fw_name = "Embedding Task"
 
+    # -----------------------------
+    # Text processing
+    # -----------------------------
     def extract_sentences(self, text_values: list[str]) -> list[str]:
         sentences = []
         for fragment in text_values:
             fragment = re.sub(r"<[^>]+>", " ", fragment)
             fragment = re.sub(r"<math[^>]*>.*?</math>", " ", fragment, flags=re.DOTALL)
             fragment = re.sub(r"\s+", " ", fragment).strip()
+
             if not fragment:
                 continue
             if not re.search(r"[a-zA-Z]{4,}", fragment):
                 continue
+
             splits = SENTENCE_SPLIT.split(fragment)
             for s in splits:
                 s = s.strip()
                 if len(s) > 20:
                     sentences.append(s)
+
         return sentences
 
     def find_text_values(self, d, results=None):
         if results is None:
             results = []
+
         if isinstance(d, dict):
             for key, value in d.items():
                 if key == "text":
@@ -48,84 +60,99 @@ class EmbeddingTask(FireTaskBase):
                     continue
                 else:
                     self.find_text_values(value, results)
+
         elif isinstance(d, list):
             for item in d:
                 self.find_text_values(item, results)
+
         return results
 
-    def get_documents(self, impulse_identifier: str, coll) -> list[str]:
-        cursor = coll.find({"impulse_identifier": impulse_identifier})
-        all_sentences = []
+    # -----------------------------
+    # Data extraction with page_number
+    # -----------------------------
+    def get_documents(self, impulse_identifier: str, coll):
+        cursor = coll.find(
+            {"impulse_identifier": impulse_identifier},
+            {"page_number": 1, "extracted_data": 1},
+        )
+
+        results = []
+
         for doc in cursor:
+            page_number = doc.get("page_number")
+
             text_values = self.find_text_values(doc)
             sentences = self.extract_sentences(text_values)
-            all_sentences.extend(sentences)
-        print(f"Extracted {len(all_sentences)} sentences")
-        return all_sentences
 
-    def embed(self, sentences: list[str]) -> list[list[float]]:
+            for i, sentence in enumerate(sentences):
+                results.append(
+                    {
+                        "impulse_identifier": impulse_identifier,
+                        "page_number": page_number,
+                        "sentence": sentence,
+                        "chunk_index": i,  # useful for ordering later
+                    }
+                )
+
+        print(f"Extracted {len(results)} sentences")
+        return results
+
+    # -----------------------------
+    # Embedding
+    # -----------------------------
+    def embed(self, items):
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer("Qwen/Qwen3-Embedding-8B", device="cuda")
+
+        sentences = [x["sentence"] for x in items]
         embeddings = model.encode(sentences, show_progress_bar=True)
-        print(f"Embedded {len(embeddings)} sentences, dimension: {embeddings.shape[1]}")
-        return embeddings.tolist()
 
-    def store_embeddings(
-        self,
-        impulse_identifier: str,
-        sentences: list[str],
-        embeddings: list[list[float]],
-        coll,
-    ) -> None:
-        docs = [
-            {
-                "impulse_identifier": impulse_identifier,
-                "sentence": sentence,
-                "embedding": embedding,
-            }
-            for sentence, embedding in zip(sentences, embeddings)
-        ]
-        result = coll.insert_many(docs)
-        print(f"Stored {len(result.inserted_ids)} embeddings")
+        for item, emb in zip(items, embeddings):
+            item["embedding"] = emb.tolist()
 
+        print(f"Embedded {len(items)} sentences")
+        return items
+
+    # -----------------------------
+    # Storage
+    # -----------------------------
+    def store_embeddings(self, items, coll):
+        if not items:
+            return
+
+        coll.insert_many(items)
+        print(f"Stored {len(items)} embeddings")
+
+    # -----------------------------
+    # Main task
+    # -----------------------------
     @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        from pymongo import MongoClient
-        import certifi
-
-        client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
+    def run_task(self, fw_spec: dict) -> FWAction:
+        client = MongoClient(fw_spec.get("mongo_uri"), tlsCAFile=certifi.where())
         db = client["praxis"]
 
-        impulse_identifier: str | None = fw_spec.get("impulse_identifier", None)
+        impulse_identifier = fw_spec.get("impulse_identifier")
+
         if not isinstance(impulse_identifier, str):
-            exit(1)
+            raise ValueError("impulse_identifier must be a string")
 
-        sentences = self.get_documents(impulse_identifier, coll=db["colt"])
-        embeddings = self.embed(sentences)
-        self.store_embeddings(
-            impulse_identifier, sentences, embeddings, coll=db["embeddings"]
-        )
+        source_coll = db["colt"]
+        target_coll = db["embeddings"]
 
-        return FWAction(stored_data={"num_embeddings": len(embeddings)})
+        # Step 1: extract sentences WITH page numbers
+        items = self.get_documents(impulse_identifier, source_coll)
 
-    @override
-    def run_task(self, fw_spec: dict[str, str]) -> FWAction:
-        from pymongo import MongoClient
-        import certifi
+        if not items:
+            return FWAction(stored_data={"num_embeddings": 0})
 
-        client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
-        db = client["praxis"]
+        # Step 2: embed
+        items = self.embed(items)
 
-        impulse_identifier: str | None = fw_spec.get("impulse_identifier", None)
-        if not isinstance(impulse_identifier, str):
-            exit(1)
+        # Step 3: store
+        self.store_embeddings(items, target_coll)
 
-        sentences = self.get_documents(impulse_identifier, coll=db["colt"])
-        embeddings = self.embed(sentences)
-        self.store_embeddings(
-            impulse_identifier, sentences, embeddings, coll=db["embeddings"]
-        )
+        return FWAction(stored_data={"num_embeddings": len(items)})
 
 
 class ImageProcessingTask(FireTaskBase):
