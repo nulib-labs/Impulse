@@ -249,7 +249,7 @@ class EmbeddingTask(FireTaskBase):
             chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
         )
 
-        for item, emb in zip(items, embs):
+        for item, emb in zip(chunks, embs):
             item["embedding"] = emb.tolist()
 
         return items
