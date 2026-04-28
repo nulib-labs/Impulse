@@ -251,13 +251,12 @@ class EmbeddingTask(FireTaskBase):
 
         items = []
         for item, emb in zip(chunks, embs):
-            items.append({"chunk": item, "embedding": emb})
+            items.append({"chunk": item, "embedding": emb.tolist()})
 
         return items
 
     def store(self, items, coll):
         ops = []
-        logger.debug(f"Items: {items}")
         for item in items:
             print(item)
             ops.append(
