@@ -1,7 +1,9 @@
 import io
 import json
+import queue
 import re
-from typing import override
+import threading
+from typing import Generator, override
 from uuid import uuid4
 
 import boto3
@@ -195,22 +197,62 @@ class EmbeddingTask(FireTaskBase):
         return mapped
 
     # ----------------------------
+    # MAIN PIPELINE (BATCHED GENERATOR)
+    # ----------------------------
+    def get_documents_batched(
+        self, impulse_identifier: str, coll, batch_size: int = 128
+    ) -> Generator[list[dict], None, None]:
+        """Yield sentence batches from the extraction pipeline.
+
+        This is the streaming counterpart of ``get_documents``.  Instead of
+        materialising the full list up-front, it yields lists of at most
+        *batch_size* mapped-sentence dicts, allowing the caller to start
+        embedding while extraction is still in progress.
+        """
+        stream = self.extract_stream(impulse_identifier, coll)
+        full_text, char_map = self.build_document(stream)
+        sentences = self.split_sentences(full_text)
+        sentences = self.merge_broken_sentences(sentences)
+        mapped = self.map_pages(sentences, full_text, char_map)
+
+        logger.info(
+            f"Extracted {len(mapped)} sentences (streaming in batches of {batch_size})"
+        )
+
+        for i in range(0, len(mapped), batch_size):
+            yield mapped[i : i + batch_size]
+
+    # ----------------------------
     # EMBEDDING (BATCH SAFE)
     # ----------------------------
-    def embed(self, items, batch_size: int = 128):
+    def embed(self, items, batch_size: int = 128, k=8):
         from sentence_transformers import SentenceTransformer
+        from collections import deque
+        from itertools import islice
+
+        def sliding_window(iterable, n):
+            "Collect data into overlapping fixed-length chunks or blocks."
+            # sliding_window('ABCDEFG', 3) → ABC BCD CDE DEF EFG
+            iterator = iter(iterable)
+            window = deque(islice(iterator, n - 1), maxlen=n)
+            for x in iterator:
+                window.append(x)
+                yield tuple(window)
 
         model = SentenceTransformer(
             "Qwen/Qwen3-Embedding-0.6B",
-            device="cuda",
+            device="cpu",
             model_kwargs={"torch_dtype": "float16"},
         )
 
         sentences = [x["sentence"] for x in items]
         embeddings = []
 
-        for i in range(0, len(sentences), batch_size):
-            batch = sentences[i : i + batch_size]
+        for i in sliding_window(sentences, 8):
+            batch = []
+
+            for j in i:
+                batch.append(j)
 
             emb = model.encode(
                 batch,
@@ -222,6 +264,28 @@ class EmbeddingTask(FireTaskBase):
             embeddings.extend(emb)
 
         for item, emb in zip(items, embeddings):
+            item["embedding"] = emb.tolist()
+
+        return items
+
+    @staticmethod
+    def embed_batch(items: list[dict], model, batch_size: int = 128) -> list[dict]:
+        """Encode a single batch of items using a pre-loaded model.
+
+        Unlike :meth:`embed`, this does **not** load the model itself and
+        expects the caller to pass one in.  This makes it suitable for use
+        inside a pipeline where the model is loaded once and reused.
+        """
+        sentences = [x["sentence"] for x in items]
+
+        embs = model.encode(
+            sentences,
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            show_progress_bar=True,
+        )
+
+        for item, emb in zip(items, embs):
             item["embedding"] = emb.tolist()
 
         return items
@@ -250,6 +314,77 @@ class EmbeddingTask(FireTaskBase):
         logger.success(f"Stored {len(ops)} embeddings")
 
     # ----------------------------
+    # ASYNC PIPELINE (PRODUCER / CONSUMER)
+    # ----------------------------
+    def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 128) -> int:
+        """Stream extraction into embedding using a threaded producer/consumer.
+
+        A background thread runs the full extraction pipeline
+        (``get_documents_batched``) and pushes sentence batches onto a
+        bounded queue.  The main thread pulls batches off the queue,
+        encodes them on GPU, and stores the results — so the GPU never
+        idles waiting for extraction to finish.
+
+        Args:
+            impulse_identifier: The document identifier to process.
+            db: A pymongo ``Database`` instance (e.g. ``client["praxis"]``).
+            batch_size: Number of sentences per batch.
+
+        Returns:
+            Total number of embedded sentences.
+        """
+        from sentence_transformers import SentenceTransformer
+
+        # -- shared queue (bounded so producer doesn't run too far ahead) --
+        _SENTINEL = object()
+        q: queue.Queue = queue.Queue(maxsize=2)
+
+        # -- producer: extraction pipeline (CPU / IO bound) --
+        def producer():
+            try:
+                for batch in self.get_documents_batched(
+                    impulse_identifier, db["colt"], batch_size
+                ):
+                    for item in batch:
+                        item["impulse_identifier"] = impulse_identifier
+                    q.put(batch)
+            except Exception as exc:
+                q.put(exc)
+            finally:
+                q.put(_SENTINEL)
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        # -- consumer: embedding + storage (GPU bound) --
+        model = SentenceTransformer(
+            "Qwen/Qwen3-Embedding-0.6B",
+            device="cuda",
+            model_kwargs={"dtype": "float16"},
+        )
+
+        total = 0
+
+        while True:
+            batch = q.get()
+
+            if batch is _SENTINEL:
+                break
+
+            # Re-raise any exception thrown by the producer thread
+            if isinstance(batch, BaseException):
+                producer_thread.join()
+                raise batch
+
+            batch = self.embed_batch(batch, model, batch_size=batch_size)
+            self.store(batch, coll=db["embeddings"])
+            total += len(batch)
+
+        producer_thread.join()
+        logger.success(f"Pipeline complete — {total} embeddings total")
+        return total
+
+    # ----------------------------
     # FIREWORK ENTRYPOINT
     # ----------------------------
     @override
@@ -261,17 +396,9 @@ class EmbeddingTask(FireTaskBase):
         if not impulse_identifier:
             raise ValueError("Missing impulse_identifier")
 
-        items = self.get_documents(impulse_identifier, coll=db["colt"])
+        total = self._run_pipeline(impulse_identifier, db, batch_size=128)
 
-        # attach metadata
-        for i in items:
-            i["impulse_identifier"] = impulse_identifier
-
-        items = self.embed(items, batch_size=128)
-
-        self.store(items, coll=db["embeddings"])
-
-        return FWAction(stored_data={"num_embeddings": len(items)})
+        return FWAction(stored_data={"num_embeddings": total})
 
 
 class ImageProcessingTask(FireTaskBase):
