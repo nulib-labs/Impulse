@@ -246,10 +246,10 @@ class EmbeddingTask(FireTaskBase):
         embeddings = []
 
         for i in sliding_window(sentences, k):
-            batch = []
+            batch = ""
 
             for j in i:
-                batch.append(j)
+                batch += j
 
             emb = model.encode(
                 batch,
