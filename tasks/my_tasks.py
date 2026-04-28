@@ -222,19 +222,16 @@ class EmbeddingTask(FireTaskBase):
         for i in range(0, len(mapped), batch_size):
             yield mapped[i : i + batch_size]
 
-    # ----------------------------
-    # EMBEDDING (BATCH SAFE)
-    # ----------------------------
     def embed(self, items, batch_size: int = 128, k=8):
         from sentence_transformers import SentenceTransformer
         from collections import deque
         from itertools import islice
 
-        def sliding_window(iterable, n):
+        def sliding_window(iterable, k):
             "Collect data into overlapping fixed-length chunks or blocks."
             # sliding_window('ABCDEFG', 3) → ABC BCD CDE DEF EFG
             iterator = iter(iterable)
-            window = deque(islice(iterator, n - 1), maxlen=n)
+            window = deque(islice(iterator, k - 1), maxlen=k)
             for x in iterator:
                 window.append(x)
                 yield tuple(window)
@@ -248,7 +245,7 @@ class EmbeddingTask(FireTaskBase):
         sentences = [x["sentence"] for x in items]
         embeddings = []
 
-        for i in sliding_window(sentences, 8):
+        for i in sliding_window(sentences, k):
             batch = []
 
             for j in i:
@@ -268,31 +265,6 @@ class EmbeddingTask(FireTaskBase):
 
         return items
 
-    @staticmethod
-    def embed_batch(items: list[dict], model, batch_size: int = 128) -> list[dict]:
-        """Encode a single batch of items using a pre-loaded model.
-
-        Unlike :meth:`embed`, this does **not** load the model itself and
-        expects the caller to pass one in.  This makes it suitable for use
-        inside a pipeline where the model is loaded once and reused.
-        """
-        sentences = [x["sentence"] for x in items]
-
-        embs = model.encode(
-            sentences,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            show_progress_bar=True,
-        )
-
-        for item, emb in zip(items, embs):
-            item["embedding"] = emb.tolist()
-
-        return items
-
-    # ----------------------------
-    # STORE EMBEDDINGS
-    # ----------------------------
     def store(self, items, coll):
         ops = []
 
@@ -313,9 +285,6 @@ class EmbeddingTask(FireTaskBase):
 
         logger.success(f"Stored {len(ops)} embeddings")
 
-    # ----------------------------
-    # ASYNC PIPELINE (PRODUCER / CONSUMER)
-    # ----------------------------
     def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 128) -> int:
         """Stream extraction into embedding using a threaded producer/consumer.
 
@@ -376,7 +345,7 @@ class EmbeddingTask(FireTaskBase):
                 producer_thread.join()
                 raise batch
 
-            batch = self.embed_batch(batch, model, batch_size=batch_size)
+            batch = self.embed(batch, batch_size=batch_size, k=8)
             self.store(batch, coll=db["embeddings"])
             total += len(batch)
 
