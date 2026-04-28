@@ -264,7 +264,7 @@ class EmbeddingTask(FireTaskBase):
                 UpdateOne(
                     {
                         "impulse_identifier": item.get("impulse_identifier"),
-                        "sentence": item["sentence"],
+                        "chunk": item["chunk"],
                     },
                     {"$set": item},
                     upsert=True,
