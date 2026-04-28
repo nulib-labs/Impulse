@@ -243,25 +243,13 @@ class EmbeddingTask(FireTaskBase):
         )
 
         sentences = [x["sentence"] for x in items]
-        embeddings = []
         chunks = sliding_window(sentences, k)
         chunks = [" ".join([ci for ci in c]) for c in chunks]
-        for i in sliding_window(sentences, k):
-            batch = ""
+        embs = model.encode(
+            chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
+        )
 
-            for j in i:
-                batch += j
-
-            emb = model.encode(
-                batch,
-                batch_size=batch_size,
-                convert_to_numpy=True,
-                show_progress_bar=True,
-            )
-
-            embeddings.extend(emb)
-
-        for item, emb in zip(items, embeddings):
+        for item, emb in zip(items, embs):
             item["embedding"] = emb.tolist()
 
         return items
