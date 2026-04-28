@@ -259,6 +259,7 @@ class EmbeddingTask(FireTaskBase):
         ops = []
 
         for item in items:
+            print(item)
             ops.append(
                 UpdateOne(
                     {
