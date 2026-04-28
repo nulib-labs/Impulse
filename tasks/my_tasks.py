@@ -250,7 +250,7 @@ class EmbeddingTask(FireTaskBase):
         )
 
         items = []
-        for item, emb in zip(items, embs):
+        for item, emb in zip(chunks, embs):
             items.append({"chunk": item, "embedding": emb})
 
         return items
