@@ -249,8 +249,9 @@ class EmbeddingTask(FireTaskBase):
             chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
         )
 
-        for item, emb in zip(chunks, embs):
-            item["embedding"] = emb.tolist()
+        items = []
+        for item, emb in zip(items, embs):
+            items.append({"chunk": item, "embedding": emb})
 
         return items
 
@@ -314,13 +315,6 @@ class EmbeddingTask(FireTaskBase):
         producer_thread = threading.Thread(target=producer, daemon=True)
         producer_thread.start()
 
-        # -- consumer: embedding + storage (GPU bound) --
-        model = SentenceTransformer(
-            "Qwen/Qwen3-Embedding-0.6B",
-            device="cuda",
-            model_kwargs={"dtype": "float16"},
-        )
-
         total = 0
 
         while True:
@@ -342,9 +336,6 @@ class EmbeddingTask(FireTaskBase):
         logger.success(f"Pipeline complete — {total} embeddings total")
         return total
 
-    # ----------------------------
-    # FIREWORK ENTRYPOINT
-    # ----------------------------
     @override
     def run_task(self, fw_spec: dict) -> FWAction:
         client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
