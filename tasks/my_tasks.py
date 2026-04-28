@@ -244,7 +244,8 @@ class EmbeddingTask(FireTaskBase):
 
         sentences = [x["sentence"] for x in items]
         embeddings = []
-
+        chunks = sliding_window(sentences, k)
+        chunks = [" ".join([ci for ci in c]) for c in chunks]
         for i in sliding_window(sentences, k):
             batch = ""
 
