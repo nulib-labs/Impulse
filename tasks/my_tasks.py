@@ -257,7 +257,7 @@ class EmbeddingTask(FireTaskBase):
 
     def store(self, items, coll):
         ops = []
-
+        logger.debug(f"Items: {items}")
         for item in items:
             print(item)
             ops.append(
