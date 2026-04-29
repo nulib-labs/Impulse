@@ -27,4 +27,4 @@ source projects.
 
 - [Fireworks by materialsproject](https://materialsproject.github.io/fireworks/)
 - [Surya by DataLab](https://github.com/datalab-to/surya)
-# ImpulseSuperCompute
+- [Sentence-Transformers](https://sbert.net/)
