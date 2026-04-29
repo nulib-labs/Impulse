@@ -183,7 +183,7 @@ class EmbeddingTask(FireTaskBase):
     # ----------------------------
     # MAIN PIPELINE
     # ----------------------------
-    def get_documents(self, impulse_identifier: str, coll):
+    def get_documents(self, impulse_identifier: str, coll) -> list[str]:
         stream = self.extract_stream(impulse_identifier, coll)
 
         full_text, char_map = self.build_document(stream)
@@ -222,7 +222,7 @@ class EmbeddingTask(FireTaskBase):
         for i in range(0, len(mapped), batch_size):
             yield mapped[i : i + batch_size]
 
-    def embed(self, items, batch_size: int = 128, k=8):
+    def embed(self, items, batch_size: int = 128, k=4):
         from sentence_transformers import SentenceTransformer
         from collections import deque
         from itertools import islice
@@ -238,14 +238,14 @@ class EmbeddingTask(FireTaskBase):
 
         model = SentenceTransformer(
             "Qwen/Qwen3-Embedding-0.6B",
-            device="cuda",
+            device="cpu",
             model_kwargs={"torch_dtype": "float16"},
         )
 
         sentences = [x["sentence"] for x in items]
         chunks = sliding_window(sentences, k)
         chunks = [" ".join([ci for ci in c]) for c in chunks]
-        embs = model.encode(
+        embs = model.encode_query(
             chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
         )
 

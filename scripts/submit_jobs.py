@@ -1,6 +1,4 @@
-from fireworks import Firework, LaunchPad, Workflow
-from fireworks.core.rocket_launcher import launch_rocket
-from tasks.mets import METSXMLToHathiTrustManifestTask
+from fireworks import Firework, LaunchPad
 from tasks.my_tasks import DocumentExtractionTask
 from tasks.config import MONGO_URI
 import boto3
@@ -67,7 +65,6 @@ for i in output:
         },
         name="Document Extraction Workflow",
     )
-
 
     launchpad.add_wf(ocr_fw)
 
