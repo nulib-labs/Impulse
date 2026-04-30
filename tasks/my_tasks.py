@@ -615,31 +615,39 @@ class DocumentExtractionTask(FireTaskBase):
         logger.success(f"Successfully saved file to s3: {key}")
         return True
 
-    def _predict_chandra(self, image_bytes: bytes, file_ext: str, manager):
-        """Run chandra OCR extraction on a single image or PDF page.
+    @staticmethod
+    def _load_images(image_bytes: bytes, file_ext: str):
+        """Decode raw bytes into a list of PIL images.
+
+        A single-page image produces a one-element list; a PDF is expanded
+        into one image per page.
 
         Args:
             image_bytes: Raw file bytes (image or PDF).
-            file_ext: File extension (e.g. 'png', 'pdf', 'jpg').
-            manager: A pre-built chandra InferenceManager instance.
+            file_ext: File extension (e.g. ``'png'``, ``'pdf'``, ``'jpg'``).
 
         Returns:
-            List of BatchOutputItem (one per page).
+            list[PIL.Image.Image]
         """
-        from chandra.model.schema import BatchInputItem
         from chandra.input import load_pdf_images
         from PIL import Image
 
         if file_ext == "pdf":
-            images = load_pdf_images(io.BytesIO(image_bytes))
-        else:
-            images = [Image.open(io.BytesIO(image_bytes)).convert("RGB")]
+            return load_pdf_images(io.BytesIO(image_bytes))
+        return [Image.open(io.BytesIO(image_bytes)).convert("RGB")]
 
-        batch = [
-            BatchInputItem(image=img, prompt_type="ocr_layout") for img in images
-        ]
-        results = manager.generate(batch)
-        return results
+    @staticmethod
+    def _predict_chandra_batch(batch_input_items, manager):
+        """Send an already-assembled list of BatchInputItems to vLLM in one call.
+
+        Args:
+            batch_input_items: list[BatchInputItem] — all images for this batch.
+            manager: A pre-built chandra ``InferenceManager`` instance.
+
+        Returns:
+            list[BatchOutputItem] — one result per input item, same order.
+        """
+        return manager.generate(batch_input_items)
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -716,15 +724,22 @@ class DocumentExtractionTask(FireTaskBase):
 
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
-        """
-        This method runs the OCR task.
-        This method looks for `path_array`.
+        """Run batched OCR extraction via vLLM.
+
+        Images are downloaded from S3 in groups of *batch_size*, converted
+        to ``BatchInputItem`` objects (PDFs are expanded into one item per
+        page), and sent to the chandra ``InferenceManager`` as a **single**
+        ``generate()`` call per batch.  This lets vLLM process all images
+        in the batch in parallel instead of one-at-a-time.
         """
         from chandra.model import InferenceManager
+        from chandra.model.schema import BatchInputItem
         from itertools import batched
 
         find_path_array_in: str = fw_spec["find_path_array_in"]
-        path_array: list[str] = fw_spec[find_path_array_in]  # Get the list of S3 keys
+        path_array: list[str] = fw_spec[find_path_array_in]
+        batch_size: int = fw_spec.get("batch_size", 32)
+
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
 
@@ -733,45 +748,75 @@ class DocumentExtractionTask(FireTaskBase):
         manager = InferenceManager(method="vllm")
         logger.success("InferenceManager ready.")
 
-        i = 0
-        for batch in batched(path_array, n=32):
-            contents: list[dict] = []
-            for path in batch:
-                i += 1
-                logger.info(f"`path`: {path}")
+        page_counter = 0
+
+        for path_batch in batched(path_array, n=batch_size):
+            # ----------------------------------------------------------
+            # Phase 1: Download & decode all images in this batch
+            # ----------------------------------------------------------
+            # Each entry tracks the metadata needed to reassemble results.
+            #   batch_input_items  — flat list of BatchInputItem for vLLM
+            #   item_meta          — parallel list mapping each item back
+            #                        to its source file
+            batch_input_items: list = []
+            item_meta: list[dict] = []
+
+            for path in path_batch:
+                page_counter += 1
                 filename = path.split("/")[-1]
-                logger.info(f"Filename: {filename}")
-                # Get content from S3
-                logger.info("Now loading content from S3")
+                logger.info(f"Downloading {filename} from S3")
                 image_bytes = get_s3_content(path)
-
                 file_ext = self.filetype(image_bytes) or "png"
-                results = self._predict_chandra(image_bytes, file_ext, manager)
 
-                for result in results:
-                    confidence_summary = {
-                        "error": result.error,
-                        "token_count": result.token_count,
-                        "text_extraction_method": "chandra",
-                    }
+                images = self._load_images(image_bytes, file_ext)
 
-                    contents.append(
+                for img in images:
+                    batch_input_items.append(
+                        BatchInputItem(image=img, prompt_type="ocr_layout")
+                    )
+                    item_meta.append(
                         {
                             "filename": filename,
-                            "page_number": i,
-                            "impulse_identifier": fw_spec["impulse_identifier"],
+                            "page_number": page_counter,
                             "source_image": path,
-                            "extraction_model": "chandra",
-                            "extracted_data": funcs.stringify_keys(
-                                {
-                                    "html": result.html,
-                                    "markdown": result.markdown,
-                                    "chunks": result.chunks,
-                                }
-                            ),
-                            "confidence_summary": confidence_summary,
+                            "impulse_identifier": fw_spec["impulse_identifier"],
                         }
                     )
+
+            logger.info(
+                f"Batch ready: {len(path_batch)} files → "
+                f"{len(batch_input_items)} images to vLLM"
+            )
+
+            # ----------------------------------------------------------
+            # Phase 2: Single batched vLLM inference call
+            # ----------------------------------------------------------
+            results = self._predict_chandra_batch(batch_input_items, manager)
+
+            # ----------------------------------------------------------
+            # Phase 3: Reassemble results with metadata & persist
+            # ----------------------------------------------------------
+            contents: list[dict] = []
+            for meta, result in zip(item_meta, results):
+                contents.append(
+                    {
+                        **meta,
+                        "extraction_model": "chandra",
+                        "extracted_data": funcs.stringify_keys(
+                            {
+                                "html": result.html,
+                                "markdown": result.markdown,
+                                "chunks": result.chunks,
+                            }
+                        ),
+                        "confidence_summary": {
+                            "error": result.error,
+                            "token_count": result.token_count,
+                            "text_extraction_method": "chandra",
+                        },
+                    }
+                )
+
             self.save_to_mongo(
                 contents,
                 collection=_get_db()["colt"],
