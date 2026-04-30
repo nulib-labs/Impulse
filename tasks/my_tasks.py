@@ -200,7 +200,7 @@ class EmbeddingTask(FireTaskBase):
     # MAIN PIPELINE (BATCHED GENERATOR)
     # ----------------------------
     def get_documents_batched(
-        self, impulse_identifier: str, coll, batch_size: int = 128
+        self, impulse_identifier: str, coll, batch_size: int = 16
     ) -> Generator[list[dict], None, None]:
         """Yield sentence batches from the extraction pipeline.
 
@@ -222,7 +222,7 @@ class EmbeddingTask(FireTaskBase):
         for i in range(0, len(mapped), batch_size):
             yield mapped[i : i + batch_size]
 
-    def embed(self, items, batch_size: int = 128, k=4):
+    def embed(self, items, batch_size: int = 16, k=4):
         from sentence_transformers import SentenceTransformer
         from collections import deque
         from itertools import islice
@@ -275,7 +275,7 @@ class EmbeddingTask(FireTaskBase):
 
         logger.success(f"Stored {len(ops)} embeddings")
 
-    def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 128) -> int:
+    def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 16) -> int:
         """Stream extraction into embedding using a threaded producer/consumer.
 
         A background thread runs the full extraction pipeline
@@ -615,45 +615,31 @@ class DocumentExtractionTask(FireTaskBase):
         logger.success(f"Successfully saved file to s3: {key}")
         return True
 
-    @staticmethod
-    def _create_converter():
-        """Create a ConfidencePdfConverter with models loaded once.
-
-        This is expensive (loads all surya models into GPU memory), so it
-        should be called once and the converter reused across all images.
-        """
-        from tasks.confidence import ConfidencePdfConverter
-        from marker.models import create_model_dict
-        from marker.config.parser import ConfigParser
-
-        config = {"output_format": "json"}
-        config_parser = ConfigParser(config)
-
-        converter = ConfidencePdfConverter(
-            config=config_parser.generate_config_dict(),
-            artifact_dict=create_model_dict(),
-            processor_list=config_parser.get_processors(),
-            renderer=config_parser.get_renderer(),
-            llm_service=config_parser.get_llm_service(),
-        )
-        return converter
-
-    def _predict(self, contents, converter=None):
-        """Run marker OCR extraction and return rendered output + confidence data.
+    def _predict_chandra(self, image_bytes: bytes, file_ext: str, manager):
+        """Run chandra OCR extraction on a single image or PDF page.
 
         Args:
-            contents: Raw image/PDF bytes.
-            converter: A pre-built ConfidencePdfConverter instance. If None,
-                creates a new one (expensive -- loads all models).
+            image_bytes: Raw file bytes (image or PDF).
+            file_ext: File extension (e.g. 'png', 'pdf', 'jpg').
+            manager: A pre-built chandra InferenceManager instance.
 
         Returns:
-            Tuple of (rendered_output, ocr_confidences, table_confidences)
+            List of BatchOutputItem (one per page).
         """
-        if converter is None:
-            converter = self._create_converter()
+        from chandra.model.schema import BatchInputItem
+        from chandra.input import load_pdf_images
+        from PIL import Image
 
-        rendered = converter(io.BytesIO(contents))
-        return rendered, converter.ocr_confidences, converter.table_confidences
+        if file_ext == "pdf":
+            images = load_pdf_images(io.BytesIO(image_bytes))
+        else:
+            images = [Image.open(io.BytesIO(image_bytes)).convert("RGB")]
+
+        batch = [
+            BatchInputItem(image=img, prompt_type="ocr_layout") for img in images
+        ]
+        results = manager.generate(batch)
+        return results
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -734,19 +720,18 @@ class DocumentExtractionTask(FireTaskBase):
         This method runs the OCR task.
         This method looks for `path_array`.
         """
-        find_path_array_in: list[str] = fw_spec[
-            "find_path_array_in"
-        ]  # What key to get the array of S3 keys from
+        from chandra.model import InferenceManager
+        from itertools import batched
+
+        find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]  # Get the list of S3 keys
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
 
-        # Load models once and reuse the converter across all images
-        logger.info("Loading marker models (one-time initialization)...")
-        converter = self._create_converter()
-        logger.success("Models loaded.")
-
-        from itertools import batched
+        # Initialise chandra inference once and reuse across all images
+        logger.info("Initialising chandra InferenceManager...")
+        manager = InferenceManager(method="vllm")
+        logger.success("InferenceManager ready.")
 
         i = 0
         for batch in batched(path_array, n=32):
@@ -760,52 +745,33 @@ class DocumentExtractionTask(FireTaskBase):
                 logger.info("Now loading content from S3")
                 image_bytes = get_s3_content(path)
 
-                rendered, ocr_confidences, table_confidences = self._predict(
-                    image_bytes, converter=converter
-                )
+                file_ext = self.filetype(image_bytes) or "png"
+                results = self._predict_chandra(image_bytes, file_ext, manager)
 
-                # Compute confidence summary statistics
-                # For single-image inputs, page_id is always 0
-                all_line_confs = []
-                for page_id, page_lines in ocr_confidences.items():
-                    for line in page_lines:
-                        if line["confidence"] > 0:
-                            all_line_confs.append(line["confidence"])
-
-                confidence_summary = {
-                    "mean_line_confidence": (
-                        sum(all_line_confs) / len(all_line_confs)
-                        if all_line_confs
-                        else None
-                    ),
-                    "min_line_confidence": (
-                        min(all_line_confs) if all_line_confs else None
-                    ),
-                    "max_line_confidence": (
-                        max(all_line_confs) if all_line_confs else None
-                    ),
-                    "num_lines": len(all_line_confs),
-                    "num_low_confidence_lines": sum(
-                        1 for c in all_line_confs if c < 0.7
-                    ),
-                    "text_extraction_method": "surya",
-                }
-
-                contents.append(
-                    {
-                        "filename": filename,
-                        "page_number": i,
-                        "impulse_identifier": fw_spec["impulse_identifier"],
-                        "source_image": path,
-                        "extraction_model": "marker",
-                        "extracted_data": funcs.stringify_keys(
-                            json.loads(rendered.model_dump_json())
-                        ),
-                        "ocr_confidences": funcs.stringify_keys(ocr_confidences),
-                        "table_confidences": funcs.stringify_keys(table_confidences),
-                        "confidence_summary": confidence_summary,
+                for result in results:
+                    confidence_summary = {
+                        "error": result.error,
+                        "token_count": result.token_count,
+                        "text_extraction_method": "chandra",
                     }
-                )
+
+                    contents.append(
+                        {
+                            "filename": filename,
+                            "page_number": i,
+                            "impulse_identifier": fw_spec["impulse_identifier"],
+                            "source_image": path,
+                            "extraction_model": "chandra",
+                            "extracted_data": funcs.stringify_keys(
+                                {
+                                    "html": result.html,
+                                    "markdown": result.markdown,
+                                    "chunks": result.chunks,
+                                }
+                            ),
+                            "confidence_summary": confidence_summary,
+                        }
+                    )
             self.save_to_mongo(
                 contents,
                 collection=_get_db()["colt"],
