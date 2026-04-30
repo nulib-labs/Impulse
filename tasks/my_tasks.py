@@ -6,6 +6,7 @@ import threading
 from typing import Generator, override
 from uuid import uuid4
 
+from natsort import natsorted
 import boto3
 from bs4 import BeautifulSoup
 import certifi
@@ -796,7 +797,8 @@ class DocumentExtractionTask(FireTaskBase):
 
         find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]
-        batch_size: int = fw_spec.get("batch_size", 32)
+        path_array = natsorted(path_array)
+        batch_size: int = fw_spec.get("batch_size", 8)
         impulse_identifier: str = fw_spec["impulse_identifier"]
 
         logger.debug(f"Value of `path_array`:{path_array}")
@@ -818,10 +820,8 @@ class DocumentExtractionTask(FireTaskBase):
             page_counter = 0
             try:
                 for path_batch in batched(path_array, n=batch_size):
-                    batch_input_items, item_meta, page_counter = (
-                        self._fetch_batch(
-                            path_batch, impulse_identifier, page_counter
-                        )
+                    batch_input_items, item_meta, page_counter = self._fetch_batch(
+                        path_batch, impulse_identifier, page_counter
                     )
                     prefetch_queue.put((batch_input_items, item_meta))
             except Exception as exc:
