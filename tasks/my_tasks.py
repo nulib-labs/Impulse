@@ -798,7 +798,7 @@ class DocumentExtractionTask(FireTaskBase):
         find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]
         path_array = natsorted(path_array)
-        batch_size: int = fw_spec.get("batch_size", 8)
+        batch_size: int = fw_spec.get("batch_size", 1)
         impulse_identifier: str = fw_spec["impulse_identifier"]
 
         logger.debug(f"Value of `path_array`:{path_array}")
