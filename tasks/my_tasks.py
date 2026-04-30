@@ -722,23 +722,82 @@ class DocumentExtractionTask(FireTaskBase):
         logger.success("Successfully uploaded all documents!")
         return True
 
+    def _fetch_batch(
+        self,
+        path_batch: tuple[str, ...],
+        impulse_identifier: str,
+        page_offset: int,
+    ) -> tuple[list, list[dict], int]:
+        """Download and decode all images for a single batch.
+
+        This encapsulates the I/O-bound Phase 1 (S3 download + image
+        decoding) so it can be run in a background thread while vLLM
+        processes the previous batch on the GPU.
+
+        Args:
+            path_batch: Tuple of S3 paths for this batch.
+            impulse_identifier: The impulse identifier for metadata.
+            page_offset: Starting page number for this batch.
+
+        Returns:
+            (batch_input_items, item_meta, next_page_offset)
+        """
+        from chandra.model.schema import BatchInputItem
+
+        batch_input_items: list = []
+        item_meta: list[dict] = []
+        page_counter = page_offset
+
+        for path in path_batch:
+            page_counter += 1
+            filename = path.split("/")[-1]
+            logger.info(f"Downloading {filename} from S3")
+            image_bytes = get_s3_content(path)
+            file_ext = self.filetype(image_bytes) or "png"
+
+            images = self._load_images(image_bytes, file_ext)
+
+            for img in images:
+                batch_input_items.append(
+                    BatchInputItem(image=img, prompt_type="ocr_layout")
+                )
+                item_meta.append(
+                    {
+                        "filename": filename,
+                        "page_number": page_counter,
+                        "source_image": path,
+                        "impulse_identifier": impulse_identifier,
+                    }
+                )
+
+        logger.info(
+            f"Batch ready: {len(path_batch)} files → "
+            f"{len(batch_input_items)} images to vLLM"
+        )
+
+        return batch_input_items, item_meta, page_counter
+
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
-        """Run batched OCR extraction via vLLM.
+        """Run batched OCR extraction via vLLM with prefetched batches.
 
-        Images are downloaded from S3 in groups of *batch_size*, converted
-        to ``BatchInputItem`` objects (PDFs are expanded into one item per
-        page), and sent to the chandra ``InferenceManager`` as a **single**
-        ``generate()`` call per batch.  This lets vLLM process all images
-        in the batch in parallel instead of one-at-a-time.
+        A background producer thread downloads and decodes the *next*
+        batch from S3 while the main thread runs vLLM inference on the
+        *current* batch.  This keeps the GPU busy instead of idling
+        during S3 downloads and image decoding.
+
+        The producer pushes ``(batch_input_items, item_meta)`` tuples
+        onto a bounded queue (``maxsize=1``, i.e. at most one batch
+        ahead).  The main thread pulls from the queue, runs inference,
+        and persists results to MongoDB.
         """
         from chandra.model import InferenceManager
-        from chandra.model.schema import BatchInputItem
         from itertools import batched
 
         find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]
         batch_size: int = fw_spec.get("batch_size", 32)
+        impulse_identifier: str = fw_spec["impulse_identifier"]
 
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
@@ -748,45 +807,46 @@ class DocumentExtractionTask(FireTaskBase):
         manager = InferenceManager(method="vllm")
         logger.success("InferenceManager ready.")
 
-        page_counter = 0
+        # ------------------------------------------------------------------
+        # Producer / consumer setup
+        # ------------------------------------------------------------------
+        _SENTINEL = object()
+        prefetch_queue: queue.Queue = queue.Queue(maxsize=1)
 
-        for path_batch in batched(path_array, n=batch_size):
-            # ----------------------------------------------------------
-            # Phase 1: Download & decode all images in this batch
-            # ----------------------------------------------------------
-            # Each entry tracks the metadata needed to reassemble results.
-            #   batch_input_items  — flat list of BatchInputItem for vLLM
-            #   item_meta          — parallel list mapping each item back
-            #                        to its source file
-            batch_input_items: list = []
-            item_meta: list[dict] = []
-
-            for path in path_batch:
-                page_counter += 1
-                filename = path.split("/")[-1]
-                logger.info(f"Downloading {filename} from S3")
-                image_bytes = get_s3_content(path)
-                file_ext = self.filetype(image_bytes) or "png"
-
-                images = self._load_images(image_bytes, file_ext)
-
-                for img in images:
-                    batch_input_items.append(
-                        BatchInputItem(image=img, prompt_type="ocr_layout")
+        def producer():
+            """Download & decode batches in a background thread."""
+            page_counter = 0
+            try:
+                for path_batch in batched(path_array, n=batch_size):
+                    batch_input_items, item_meta, page_counter = (
+                        self._fetch_batch(
+                            path_batch, impulse_identifier, page_counter
+                        )
                     )
-                    item_meta.append(
-                        {
-                            "filename": filename,
-                            "page_number": page_counter,
-                            "source_image": path,
-                            "impulse_identifier": fw_spec["impulse_identifier"],
-                        }
-                    )
+                    prefetch_queue.put((batch_input_items, item_meta))
+            except Exception as exc:
+                prefetch_queue.put(exc)
+            finally:
+                prefetch_queue.put(_SENTINEL)
 
-            logger.info(
-                f"Batch ready: {len(path_batch)} files → "
-                f"{len(batch_input_items)} images to vLLM"
-            )
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        # ------------------------------------------------------------------
+        # Main loop: consume prefetched batches → vLLM → MongoDB
+        # ------------------------------------------------------------------
+        while True:
+            batch = prefetch_queue.get()
+
+            if batch is _SENTINEL:
+                break
+
+            # Re-raise any exception from the producer thread
+            if isinstance(batch, BaseException):
+                producer_thread.join()
+                raise batch
+
+            batch_input_items, item_meta = batch
 
             # ----------------------------------------------------------
             # Phase 2: Single batched vLLM inference call
@@ -823,4 +883,5 @@ class DocumentExtractionTask(FireTaskBase):
                 s3_base_path="nu-impulse-production",
             )
 
+        producer_thread.join()
         return FWAction()
