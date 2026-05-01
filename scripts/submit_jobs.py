@@ -4,8 +4,9 @@ from tasks.config import MONGO_URI
 import boto3
 import subprocess
 import os
+import certifi
 
-DEBUG = True
+DEBUG = False
 
 if DEBUG:
     MONGO_URI = os.getenv("IMPULSE_MONGODB_URI_DEBUG")
@@ -24,24 +25,26 @@ if stderr:
 else:
     output = stdout.decode("utf-8").splitlines()
     output = [i.strip().replace("PRE ", "") for i in output if i.strip()]
-print(MONGO_URI)
 z = 0
 for i in output:
-    if "DATA" in i or i.startswith("J"):
+    if not i.startswith("p1274"):
         continue
 
     launchpad: LaunchPad = LaunchPad(
         uri_mode=True,
         host=MONGO_URI,
         name="fireworks",
+        mongoclient_kwargs={"tlsCAFile": certifi.where()},
     )
 
     session = boto3.Session(profile_name="impulse")
     client = session.client("s3", region_name="us-west-2")
     paginator = client.get_paginator("list_objects_v2")
+    prefix = f"{i}"
+    print(prefix)
     operation_parameters = {
         "Bucket": "nu-impulse-production",
-        "Prefix": f"{i}SOURCE/jpg/",
+        "Prefix": prefix,
     }
 
     page_iterator = paginator.paginate(**operation_parameters)
@@ -50,24 +53,23 @@ for i in output:
     for page in page_iterator:
         try:
             for j in page["Contents"]:
-                print(j["Key"])
-                impulse_keys.append(f"s3://nu-impulse-production/{j['Key']}")
+                key = f"s3://nu-impulse-production/{j['Key']}"
+                print(key)
+                if key.endswith("jpg"):
+                    impulse_keys.append(key)
         except:
             continue
 
     print(i.replace("/", ""))
+    print(len(impulse_keys))
     ocr_fw: Firework = Firework(
         DocumentExtractionTask(),
         spec={
-            "impulse_identifier": {i.replace("/", "")},
+            "impulse_identifier": i.replace("/", "").lower(),
             "find_path_array_in": "keys",
-            "keys": sorted(impulse_keys),
+            "keys": impulse_keys,
         },
         name="Document Extraction Workflow",
     )
 
     launchpad.add_wf(ocr_fw)
-
-    z += 1
-    if z == 3:
-        break

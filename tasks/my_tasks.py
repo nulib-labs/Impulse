@@ -382,7 +382,9 @@ class ImageProcessingTask(FireTaskBase):
     def _denoise(array: MatLike) -> MatLike:
         import cv2
 
-        return cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
+        array_denoise = cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
+
+        return array_denoise
 
     @staticmethod
     def _process(content: bytes) -> None:
@@ -526,7 +528,7 @@ class ImageProcessingTask(FireTaskBase):
                         str(filestem.with_suffix(filetype)),
                     ]
                 )
-
+                logger.info("Meow")
                 # Fix 2: always save, buffer is already bytes
                 self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
 
@@ -800,6 +802,12 @@ class DocumentExtractionTask(FireTaskBase):
         path_array = natsorted(path_array)
         batch_size: int = fw_spec.get("batch_size", 1)
         impulse_identifier: str = fw_spec["impulse_identifier"]
+        impulse_identifier = (
+            impulse_identifier.replace("{", "")
+            .replace("}", "")
+            .replace("'", "")
+            .lower()
+        )
 
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")

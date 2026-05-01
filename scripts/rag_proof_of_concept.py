@@ -127,7 +127,7 @@ def get_mongo_uri(production: bool) -> str:
 def main(argv: list[str] | None = None) -> None:
     from ollama import chat
 
-    env = "debug/staging"
+    env = "production"
     print(f"Target: {env}")
 
     uri = get_mongo_uri(production=False)
@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
         messages.append(
             {
                 "role": "system",
-                "content": f"These are the returned most relevant documents from a vector search in MongoDB. You should know that all documents in this database are Environmental Impact Statements housed at Northwestern University.\n{run_search(uri, pipeline)}",
+                "content": f"These are the returned most relevant documents from a vector search in MongoDB.\n{run_search(uri, pipeline)}",
                 "stream": True,
             }
         )
