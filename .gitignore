@@ -17,3 +17,6 @@ my_qadapter.yaml
 FW.json
 
 scripts/.env
+
+# EC2 orchestrator config (contains infrastructure-specific values)
+ec2_config.yaml

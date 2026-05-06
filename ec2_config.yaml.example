@@ -1,0 +1,90 @@
+# Impulse EC2 Orchestrator Configuration
+# ========================================
+#
+# This file configures the EC2 orchestrator that watches for new FireWorks
+# jobs and launches EC2 worker instances to process them.
+#
+# Copy this file to ec2_config.yaml and fill in your values.
+# All values can also be overridden by environment variables (noted below).
+
+# ── EC2 Instance Settings ─────────────────────────────────────────────────
+
+# AMI with Python 3.13, uv, Impulse, CUDA, and ML models pre-installed.
+# Override: EC2_AMI_ID
+ami_id: ami-XXXXXXXXXXXXXXXXX
+
+# AWS region for EC2 instances.
+# Override: EC2_REGION
+region: us-east-2
+
+# VPC subnet to launch instances into.
+# Override: EC2_SUBNET_ID
+subnet_id: subnet-XXXXXXXXX
+
+# Security groups to attach to instances.
+# Override: EC2_SECURITY_GROUP_IDS (comma-separated)
+security_group_ids:
+  - sg-XXXXXXXXX
+
+# IAM instance profile granting access to S3, Secrets Manager, EC2 self-terminate.
+# Override: EC2_IAM_INSTANCE_PROFILE
+iam_instance_profile: impulse-worker-profile
+
+# (Optional) SSH key pair name for debugging access.
+# Override: EC2_KEY_NAME
+# key_name: impulse-debug
+
+# ── Scaling ───────────────────────────────────────────────────────────────
+
+# Maximum number of concurrent EC2 worker instances.
+# Override: EC2_MAX_INSTANCES
+max_instances: 5
+
+# ── Instance Type Mapping ─────────────────────────────────────────────────
+#
+# Maps FireWorks task names to EC2 instance types.
+# Tasks not listed here fall back to the "default" type.
+
+instance_type_map:
+  "Document Extraction Task": g5.xlarge
+  "Image Processing Task": g5.xlarge
+  "Embedding Task": g5.xlarge
+  "NER Task": m5.xlarge
+  "Geocode Task": m5.large
+  "Extract Metadata": m5.xlarge
+  "Summaries Task": g5.xlarge
+  default: m5.xlarge
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────
+
+# Seconds an instance waits with no pending jobs before self-terminating.
+# Override: EC2_IDLE_TIMEOUT
+idle_timeout_seconds: 300
+
+# Hard walltime limit (seconds). Instance is forcibly shut down after this.
+# Safety net in case the drain loop hangs.  Default: 12 hours.
+# Override: EC2_MAX_WALLTIME
+max_walltime_seconds: 43200
+
+# ── MongoDB ───────────────────────────────────────────────────────────────
+
+# The orchestrator's MongoDB connection (for watching the change stream).
+# In production, set IMPULSE_MONGODB_URI as an env var instead.
+# mongo_uri: mongodb+srv://user:pass@cluster.mongodb.net/
+
+# LaunchPad database name.
+# Override: EC2_MONGO_DB_NAME
+mongo_db_name: fireworks
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+
+# AWS Secrets Manager secret ID containing the MongoDB URI.
+# Workers retrieve this at boot via their IAM instance profile.
+# Override: MONGODB_SECRET_ID
+mongodb_secret_id: impulse/mongodb-uri
+
+# ── S3 ────────────────────────────────────────────────────────────────────
+
+# S3 bucket used by Impulse tasks.
+# Override: IMPULSE_BUCKET
+impulse_bucket: nu-impulse-production

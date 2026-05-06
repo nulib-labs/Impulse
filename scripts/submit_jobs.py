@@ -27,7 +27,7 @@ else:
     output = [i.strip().replace("PRE ", "") for i in output if i.strip()]
 z = 0
 for i in output:
-    if not i.startswith("p1274"):
+    if not i.startswith("p1190"):
         continue
 
     launchpad: LaunchPad = LaunchPad(
@@ -41,7 +41,6 @@ for i in output:
     client = session.client("s3", region_name="us-west-2")
     paginator = client.get_paginator("list_objects_v2")
     prefix = f"{i}"
-    print(prefix)
     operation_parameters = {
         "Bucket": "nu-impulse-production",
         "Prefix": prefix,
@@ -49,19 +48,16 @@ for i in output:
 
     page_iterator = paginator.paginate(**operation_parameters)
     impulse_keys: list[str] = []
-    xml_key = f"s3://nu-impulse-production/{i}mets.xml"
     for page in page_iterator:
         try:
             for j in page["Contents"]:
                 key = f"s3://nu-impulse-production/{j['Key']}"
-                print(key)
-                if key.endswith("jpg"):
+                if key.endswith("jpg") and "unprocessed" in key:
                     impulse_keys.append(key)
+                    print(key)
         except:
             continue
 
-    print(i.replace("/", ""))
-    print(len(impulse_keys))
     ocr_fw: Firework = Firework(
         DocumentExtractionTask(),
         spec={
