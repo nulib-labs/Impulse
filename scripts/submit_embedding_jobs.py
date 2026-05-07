@@ -4,7 +4,7 @@ from pymongo import MongoClient
 from fireworks import Firework, LaunchPad, Workflow
 from tasks.my_tasks import EmbeddingTask
 
-DEBUG = True
+DEBUG = False
 
 MONGO_URI = (
     os.getenv("IMPULSE_MONGODB_URI_DEBUG")
