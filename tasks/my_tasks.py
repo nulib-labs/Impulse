@@ -5,7 +5,10 @@ import re
 import threading
 from typing import Generator, override
 from uuid import uuid4
-
+import os
+import requests
+from collections import deque
+from itertools import islice
 from natsort import natsorted
 import boto3
 from bs4 import BeautifulSoup
@@ -23,7 +26,6 @@ from tasks import config
 from tasks.helpers import _get_db, funcs, get_s3_content
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
-
 
 SENTENCE_FILTER = re.compile(r"[a-zA-Z]{4,}")
 
@@ -223,10 +225,13 @@ class EmbeddingTask(FireTaskBase):
         for i in range(0, len(mapped), batch_size):
             yield mapped[i : i + batch_size]
 
-    def embed(self, items, batch_size: int = 16, k=4):
-        from sentence_transformers import SentenceTransformer
-        from collections import deque
-        from itertools import islice
+    def embed(
+        self,
+        items,
+        impulse_identifier: str,
+        batch_size: int = 16,
+        k=4,
+    ):
 
         def sliding_window(iterable, k):
             "Collect data into overlapping fixed-length chunks or blocks."
@@ -237,20 +242,24 @@ class EmbeddingTask(FireTaskBase):
                 window.append(x)
                 yield tuple(window)
 
-        model = SentenceTransformer(
-            "microsoft/harrier-oss-v1-27b", model_kwargs={"dtype": "auto"}
-        )
-
         sentences = [x["sentence"] for x in items]
         chunks = sliding_window(sentences, k)
         chunks = [" ".join([ci for ci in c]) for c in chunks]
-        embs = model.encode(
-            chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
-        )
 
+        embs = requests.post(
+            "http://127.0.0.1:8080/embed",
+            json={"inputs": chunks},
+        ).json()
         items = []
         for item, emb in zip(chunks, embs):
-            items.append({"chunk": item, "embedding": emb.tolist()})
+            items.append(
+                {
+                    "chunk": item,
+                    "embedding": emb,
+                    "impulse_identifier": impulse_identifier.lower(),
+                    "embedding_model": os.getenv("EMBEDDING_MODEL"),
+                }
+            )
 
         return items
 
@@ -261,7 +270,7 @@ class EmbeddingTask(FireTaskBase):
             ops.append(
                 UpdateOne(
                     {
-                        "impulse_identifier": item.get("impulse_identifier"),
+                        "impulse_identifier": item.get("impulse_identifier").lower(),
                         "chunk": item["chunk"],
                     },
                     {"$set": item},
@@ -274,7 +283,7 @@ class EmbeddingTask(FireTaskBase):
 
         logger.success(f"Stored {len(ops)} embeddings")
 
-    def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 16) -> int:
+    def _run_pipeline(self, impulse_identifier: str, db, batch_size: int = 64) -> int:
         """Stream extraction into embedding using a threaded producer/consumer.
 
         A background thread runs the full extraction pipeline
@@ -291,8 +300,6 @@ class EmbeddingTask(FireTaskBase):
         Returns:
             Total number of embedded sentences.
         """
-        from sentence_transformers import SentenceTransformer
-
         # -- shared queue (bounded so producer doesn't run too far ahead) --
         _SENTINEL = object()
         q: queue.Queue = queue.Queue(maxsize=2)
@@ -327,7 +334,7 @@ class EmbeddingTask(FireTaskBase):
                 producer_thread.join()
                 raise batch
 
-            batch = self.embed(batch, batch_size=batch_size, k=8)
+            batch = self.embed(batch, impulse_identifier, batch_size=batch_size, k=64)
             self.store(batch, coll=db["embeddings"])
             total += len(batch)
 
@@ -344,7 +351,7 @@ class EmbeddingTask(FireTaskBase):
         if not impulse_identifier:
             raise ValueError("Missing impulse_identifier")
 
-        total = self._run_pipeline(impulse_identifier, db, batch_size=128)
+        total = self._run_pipeline(impulse_identifier, db, batch_size=32)
 
         return FWAction(stored_data={"num_embeddings": total})
 

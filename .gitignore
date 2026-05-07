@@ -20,3 +20,6 @@ scripts/.env
 
 # EC2 orchestrator config (contains infrastructure-specific values)
 ec2_config.yaml
+
+# ignore docker data
+data/
