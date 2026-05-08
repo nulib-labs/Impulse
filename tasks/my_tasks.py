@@ -188,11 +188,7 @@ class EmbeddingTask(FireTaskBase):
         from collections import deque
         from itertools import islice, batched
 
-        embs = []
-
         def sliding_window(iterable, k):
-            "Collect data into overlapping fixed-length chunks or blocks."
-            # sliding_window('ABCDEFG', 3) → ABC BCD CDE DEF EFG
             iterator = iter(iterable)
             window = deque(islice(iterator, k - 1), maxlen=k)
             for x in iterator:
@@ -200,25 +196,21 @@ class EmbeddingTask(FireTaskBase):
                 yield tuple(window)
 
         sentences = [x["sentence"] for x in items]
-        chunks = sliding_window(sentences, k)
-        chunks = [" ".join([ci for ci in c]) for c in chunks]
+        chunks = [" ".join(c) for c in sliding_window(sentences, k)]
         print(f"Length of chunks: {len(chunks)}")
-        for i in batched(chunks, 64):
-            print(len(i))
-            embs.append(
-                model.encode(
-                    list(i),
-                    batch_size=batch_size,
-                    convert_to_numpy=True,
-                    show_progress_bar=True,
-                )
-            )
+
+        all_embeddings = model.encode(
+            chunks,
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            show_progress_bar=True,
+        )
 
         to_store = []
-        for item, emb in zip(chunks, embs):
-            to_store.append({"chunk": item, "embedding": emb.tolist()})
+        for chunk, emb in zip(chunks, all_embeddings):
+            to_store.append({"chunk": chunk, "embedding": emb.tolist()})
 
-        return items
+        return to_store
 
     def store(self, items, coll):
         ops = []
