@@ -182,12 +182,11 @@ class EmbeddingTask(FireTaskBase):
 
         return results
 
-    def embed(self, items, model: SentenceTransformer, batch_size: int = 16, k=4):
+    def embed(
+        self, items: list[dict], model: SentenceTransformer, batch_size: int = 16, k=4
+    ):
         from collections import deque
         from itertools import islice
-
-        embs = []
-        items = []
 
         def sliding_window(iterable, k):
             "Collect data into overlapping fixed-length chunks or blocks."
@@ -257,7 +256,7 @@ class EmbeddingTask(FireTaskBase):
             Total number of embedded sentences.
         """
 
-        def get_documents(impulse_identifier: str, coll) -> list[str]:
+        def get_documents(impulse_identifier: str, coll) -> list[dict]:
             stream = self.extract_stream(impulse_identifier, coll)
 
             full_text, char_map = self.build_document(stream)
@@ -270,8 +269,7 @@ class EmbeddingTask(FireTaskBase):
             logger.info(f"Extracted {len(mapped)} sentences")
             return mapped
 
-        documents = get_documents(impulse_identifier, db["colt"])
-        print(documents[0])
+        documents: list[dict] = get_documents(impulse_identifier, db["colt"])
         batch = self.embed(documents, model=model, batch_size=batch_size, k=256)
         self.store(batch, coll=db["embeddings"])
         return True
