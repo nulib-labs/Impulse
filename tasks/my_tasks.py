@@ -257,7 +257,7 @@ class EmbeddingTask(FireTaskBase):
             Total number of embedded sentences.
         """
 
-        def get_documents(self, impulse_identifier: str, coll) -> list[str]:
+        def get_documents(impulse_identifier: str, coll) -> list[str]:
             stream = self.extract_stream(impulse_identifier, coll)
 
             full_text, char_map = self.build_document(stream)
@@ -270,7 +270,7 @@ class EmbeddingTask(FireTaskBase):
             logger.info(f"Extracted {len(mapped)} sentences")
             return mapped
 
-        documents = get_documents(impulse_identifier, db["colt"], batch_size)
+        documents = get_documents(impulse_identifier, db["colt"])
 
         batch = self.embed(documents, model=model, batch_size=batch_size, k=256)
         self.store(batch, coll=db["embeddings"])
