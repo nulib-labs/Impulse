@@ -203,7 +203,7 @@ class EmbeddingTask(FireTaskBase):
         chunks = sliding_window(sentences, k)
         chunks = [" ".join([ci for ci in c]) for c in chunks]
         print(f"Length of chunks: {len(chunks)}")
-        for i in batched(chunks, 128):
+        for i in batched(chunks, 64):
             print(len(i))
             embs.append(
                 model.encode(
