@@ -965,6 +965,14 @@ wheels = [
 ]
 
 [[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
+]
+
+[[package]]
 name = "fonttools"
 version = "4.61.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1235,7 +1243,7 @@ dependencies = [
     { name = "pypdf2" },
     { name = "python-doctr" },
     { name = "pyyaml" },
-    { name = "sentence-transformers" },
+    { name = "sentence-transformers", extra = ["onnx"] },
     { name = "spacy" },
     { name = "surya-ocr" },
     { name = "transformers" },
@@ -1279,7 +1287,7 @@ requires-dist = [
     { name = "pypdf2", specifier = ">=3.0.1" },
     { name = "python-doctr", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sentence-transformers", specifier = ">=5.1.1" },
+    { name = "sentence-transformers", extras = ["onnx"], specifier = ">=5.1.1" },
     { name = "spacy", specifier = ">=3.8.11" },
     { name = "surya-ocr", specifier = ">=0.17.1" },
     { name = "transformers", specifier = ">=4.57.0" },
@@ -2162,6 +2170,35 @@ wheels = [
 ]
 
 [[package]]
+name = "onnxruntime"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/81/29a9eb470994a75eb7b3ccf32be314d7c66675a00ac7b50294816cc2db27/onnxruntime-1.26.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:ee1109ef4ef27cad90e823399e61e03b3c6c7bfe0fb820b4baf3678c15be8b3c", size = 18005108, upload-time = "2026-05-08T19:08:11.728Z" },
+    { url = "https://files.pythonhosted.org/packages/66/c7/73efa6c8a4000c38fcc14947d84f234a17e5d66f203b37b7f1ad4a7b46eb/onnxruntime-1.26.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:35c7c7b0ac2e02001d28fab6c9fc24e9abc5e6faa35e6e19c63cecf1406ba89f", size = 16043752, upload-time = "2026-05-08T19:07:10.707Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/3f/8de630f595daf6ce884d4dd95afd2a60e70ec6572e52bfee3aa2229befab/onnxruntime-1.26.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:11a8df4dcfe9ad5ff0bd71a7571dbed019fabc7594676c89fe8b86ea029c246f", size = 18176043, upload-time = "2026-05-08T19:07:33.735Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/21/9f041de20787cd85498bd48e0ec4d098bf2a6c486e25b24b8dae1bf492b2/onnxruntime-1.26.0-cp311-cp311-win_amd64.whl", hash = "sha256:e6456718125fd777c673f3b78d4a9ab58d6adea641e9afae85ee6444f0e0e9a9", size = 13023165, upload-time = "2026-05-08T19:08:00.633Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/82/3b9fe0ead2557cc3adf74c74c141bd1c7c4c6a9548c610af37df199f4512/onnxruntime-1.26.0-cp311-cp311-win_arm64.whl", hash = "sha256:cd920e45b730e4a87833e2910d8ca375aaca9da6ccc09e24bce463b3356d637f", size = 12789514, upload-time = "2026-05-08T19:07:49.433Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/a0/3f9d896a0385a36bd04345d6d0b802821a5782adde562e7e135f6bb71c73/onnxruntime-1.26.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:91f2bb870a4b9224eba0a6728c1fa7a9e552b8e59e1083c51fbbc3d013f2b5c0", size = 16052692, upload-time = "2026-05-08T19:07:13.829Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/43/2a4e04f8dbeffad19bbcced4bcd4289bf478921518437404d6b92bdf213b/onnxruntime-1.26.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9b6dd70599005bd1bf29779f04a91978b92b5e719c11a20068a8f8e535f725b6", size = 18185439, upload-time = "2026-05-08T19:07:36.299Z" },
+    { url = "https://files.pythonhosted.org/packages/44/fc/026d0a7162b9c2153dac292baea9e027c42304dc1d9dc6f8ff5b4cfbaedd/onnxruntime-1.26.0-cp312-cp312-win_amd64.whl", hash = "sha256:a26374dc7fbcaae593601086b242120e13f2310558df0991da6dd8b8fac00414", size = 13026427, upload-time = "2026-05-08T19:08:03.503Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/27/1dcf88e45e4c69db5f7b106f2dacc3801ba98994e082ca03e1dfdf7bfe57/onnxruntime-1.26.0-cp312-cp312-win_arm64.whl", hash = "sha256:54a8053410fd31fd66469bd754fcfe8a4df9f7eb44756b4b5479bf50c842d948", size = 12796647, upload-time = "2026-05-08T19:07:52.108Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/a2/c801242685e0ce48a4ca51dfafbb588765e0446397e123be53ba5598f3f5/onnxruntime-1.26.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:ccce19c5f771b8268902f77d9fed9e88f9499465d6780808faa6611a789d33f0", size = 18016563, upload-time = "2026-05-08T19:07:28.081Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/64/0492c0b1db04e29b2630c87cfa36f9d6872b1ca8614b90c5cad58fac7d76/onnxruntime-1.26.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bdbed8cf3b672b66acb032f33a253bc27f42bce6ece48ae3fab4fa483a5e96e0", size = 16052634, upload-time = "2026-05-08T19:07:16.885Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/26/4d09ddc755a84fc8d5e192991626b0e0680e8f6c5d58f4f1d05c42bc48cf/onnxruntime-1.26.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c07af6fc6d5557835f2b6ee7a96d8b3235d0c57a8e230efdedaee106a8a3cbc6", size = 18185632, upload-time = "2026-05-08T19:07:38.756Z" },
+    { url = "https://files.pythonhosted.org/packages/77/89/3e52249aa08fa301e217ecba07b5246a8338fa2b401e109326e3fc5be0f9/onnxruntime-1.26.0-cp313-cp313-win_amd64.whl", hash = "sha256:61bec80655efa460591c2bc655392d57d2650ce85533a6b9b3b7a790d7ea7916", size = 13026751, upload-time = "2026-05-08T19:08:06.2Z" },
+    { url = "https://files.pythonhosted.org/packages/06/b3/c1c8782b14af6797c303de132d6eef26a9fb80dfacd3750ce57911d11c6b/onnxruntime-1.26.0-cp313-cp313-win_arm64.whl", hash = "sha256:a6677545ff451e3539a02746d2f207d8c5baa4a0a818886bb9d6a6eb9511ee89", size = 12796807, upload-time = "2026-05-08T19:07:54.879Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/f5/47b0676408abec652c14b84d7173e389837832d850c24f87184277313e8d/onnxruntime-1.26.0-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5e016edc15d3c19f36807e1c6b10be5b27807688c32720f91b5ae480a95215d0", size = 16057265, upload-time = "2026-05-08T19:07:19.603Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/45/33ab6deeef010ca844c877dd618cebc079590bbe52d2a3678e7223b1b908/onnxruntime-1.26.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f5fc48a91a046a6a5c9b147f83fb41d65d24d24923373b222cdd248f0f4f4aac", size = 18197590, upload-time = "2026-05-08T19:07:41.422Z" },
+]
+
+[[package]]
 name = "openai"
 version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2213,6 +2250,41 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/5c/c139a7876099916879609372bfa513b7f1257f7f1a908b0bdc1c2328241b/opencv_python_headless-4.11.0.86-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0e0a27c19dd1f40ddff94976cfe43066fbbe9dfbb2ec1907d66c19caef42a57b", size = 49969856, upload-time = "2025-01-16T13:53:29.654Z" },
     { url = "https://files.pythonhosted.org/packages/95/dd/ed1191c9dc91abcc9f752b499b7928aacabf10567bb2c2535944d848af18/opencv_python_headless-4.11.0.86-cp37-abi3-win32.whl", hash = "sha256:f447d8acbb0b6f2808da71fddd29c1cdd448d2bc98f72d9bb78a7a898fc9621b", size = 29324425, upload-time = "2025-01-16T13:52:49.048Z" },
     { url = "https://files.pythonhosted.org/packages/86/8a/69176a64335aed183529207ba8bc3d329c2999d852b4f3818027203f50e6/opencv_python_headless-4.11.0.86-cp37-abi3-win_amd64.whl", hash = "sha256:6c304df9caa7a6a5710b91709dd4786bf20a74d57672b3c31f7033cc638174ca", size = 39402386, upload-time = "2025-01-16T13:52:56.418Z" },
+]
+
+[[package]]
+name = "optimum"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/69/e1e9fe4d54f6b1b90cc278d6da74dd90eb4d9fd9228882886d7c275712e2/optimum-2.1.0.tar.gz", hash = "sha256:0a2a13f91500e41d34863ffdb08fcb886b3ce68a84a386e59653e3064a45dd4b", size = 125896, upload-time = "2025-12-19T10:47:18.571Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4a/98/c409ed937331839fdadc03cef6ebd19982bf3834711134db8898eeb31585/optimum-2.1.0-py3-none-any.whl", hash = "sha256:bc3af32e1236a9b2c2ca1d27ed9d3ab1b6591e24c6bcd47f9671a8198a30ea88", size = 161231, upload-time = "2025-12-19T10:47:17.054Z" },
+]
+
+[[package]]
+name = "optimum-onnx"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "onnx" },
+    { name = "optimum" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/08/da/3a0073af8f436d72c1e4d9c655c00628b857bd1d9ccc101d35301d5bb2df/optimum_onnx-0.1.0.tar.gz", hash = "sha256:182c54b25eddaded1618af7b58516da34749393a987ec7111f74677f249676f9", size = 165531, upload-time = "2025-12-23T14:20:18.97Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/89/4be9d226bc74fd0eb405d1efea62e86d6f0f31841dae9c5898ee12eb482f/optimum_onnx-0.1.0-py3-none-any.whl", hash = "sha256:0301ec7a6ec5c77a57581e9970d380a6dc104bdb8f15b282e05af40d829c2eda", size = 194155, upload-time = "2025-12-23T14:20:17.741Z" },
+]
+
+[package.optional-dependencies]
+onnxruntime = [
+    { name = "onnxruntime" },
 ]
 
 [[package]]
@@ -3259,6 +3331,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a6/bc/0bc9c0ec1cf83ab2ec6e6f38667d167349b950fff6dd2086b79bd360eeca/sentence_transformers-5.2.2.tar.gz", hash = "sha256:7033ee0a24bc04c664fd490abf2ef194d387b3a58a97adcc528783ff505159fa", size = 381607, upload-time = "2026-01-27T11:11:02.658Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/21/7e925890636791386e81b52878134f114d63072e79fffe14cdcc5e7a5e6a/sentence_transformers-5.2.2-py3-none-any.whl", hash = "sha256:280ac54bffb84c110726b4d8848ba7b7c60813b9034547f8aea6e9a345cd1c23", size = 494106, upload-time = "2026-01-27T11:11:00.983Z" },
+]
+
+[package.optional-dependencies]
+onnx = [
+    { name = "optimum-onnx", extra = ["onnxruntime"] },
 ]
 
 [[package]]

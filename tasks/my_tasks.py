@@ -345,7 +345,6 @@ class EmbeddingTask(FireTaskBase):
         model = SentenceTransformer(
             "Qwen/Qwen3-Embedding-0.6B",
             device="cpu",
-            backend="onnx",
         )
         impulse_identifier = fw_spec.get("impulse_identifier")
         if not impulse_identifier:

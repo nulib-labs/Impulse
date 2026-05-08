@@ -24,7 +24,7 @@ db = client["praxis"]
 impulse_ids = db["colt"].distinct("impulse_identifier")
 
 impulse_ids = [i for i in impulse_ids if isinstance(i, str) and i.strip()]
-impulse_ids = impulse_ids
+impulse_ids = [impulse_ids[0]]
 print(f"Found {len(impulse_ids)} identifiers")
 
 # -----------------------------
@@ -54,7 +54,7 @@ fireworks = [
 # -----------------------------
 # Submit workflow
 # -----------------------------
-wf = Workflow(fireworks, name="The Embedding Flow")
-launchpad.add_wf(wf)
+for f in fireworks:
+    launchpad.add_wf(f)
 
 print("Workflow submitted.")
