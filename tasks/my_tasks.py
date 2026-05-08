@@ -202,7 +202,7 @@ class EmbeddingTask(FireTaskBase):
     # MAIN PIPELINE (BATCHED GENERATOR)
     # ----------------------------
     def get_documents_batched(
-        self, impulse_identifier: str, coll, batch_size: int = 16
+        self, impulse_identifier: str, coll, batch_size: int = 2048
     ) -> Generator[list[dict], None, None]:
         """Yield sentence batches from the extraction pipeline.
 
@@ -228,6 +228,9 @@ class EmbeddingTask(FireTaskBase):
         from collections import deque
         from itertools import islice
 
+        embs = []
+        items = []
+
         def sliding_window(iterable, k):
             "Collect data into overlapping fixed-length chunks or blocks."
             # sliding_window('ABCDEFG', 3) → ABC BCD CDE DEF EFG
@@ -245,9 +248,9 @@ class EmbeddingTask(FireTaskBase):
             chunks, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=True
         )
 
-        items = []
+        to_store = []
         for item, emb in zip(chunks, embs):
-            items.append({"chunk": item, "embedding": emb.tolist()})
+            to_store.append({"chunk": item, "embedding": emb.tolist()})
 
         return items
 
