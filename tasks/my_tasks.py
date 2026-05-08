@@ -201,7 +201,7 @@ class EmbeddingTask(FireTaskBase):
 
         all_embeddings = model.encode(
             chunks,
-            batch_size=64,
+            batch_size=16,
             convert_to_numpy=True,
             show_progress_bar=True,
         )
