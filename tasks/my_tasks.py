@@ -182,48 +182,6 @@ class EmbeddingTask(FireTaskBase):
 
         return results
 
-    # ----------------------------
-    # MAIN PIPELINE
-    # ----------------------------
-    def get_documents(self, impulse_identifier: str, coll) -> list[str]:
-        stream = self.extract_stream(impulse_identifier, coll)
-
-        full_text, char_map = self.build_document(stream)
-
-        sentences = self.split_sentences(full_text)
-        sentences = self.merge_broken_sentences(sentences)
-
-        mapped = self.map_pages(sentences, full_text, char_map)
-
-        logger.info(f"Extracted {len(mapped)} sentences")
-        return mapped
-
-    # ----------------------------
-    # MAIN PIPELINE (BATCHED GENERATOR)
-    # ----------------------------
-    def get_documents_batched(
-        self, impulse_identifier: str, coll, batch_size: int = 2048
-    ) -> Generator[list[dict], None, None]:
-        """Yield sentence batches from the extraction pipeline.
-
-        This is the streaming counterpart of ``get_documents``.  Instead of
-        materialising the full list up-front, it yields lists of at most
-        *batch_size* mapped-sentence dicts, allowing the caller to start
-        embedding while extraction is still in progress.
-        """
-        stream = self.extract_stream(impulse_identifier, coll)
-        full_text, char_map = self.build_document(stream)
-        sentences = self.split_sentences(full_text)
-        sentences = self.merge_broken_sentences(sentences)
-        mapped = self.map_pages(sentences, full_text, char_map)
-
-        logger.info(
-            f"Extracted {len(mapped)} sentences (streaming in batches of {batch_size})"
-        )
-
-        for i in range(0, len(mapped), batch_size):
-            yield mapped[i : i + batch_size]
-
     def embed(self, items, model: SentenceTransformer, batch_size: int = 16, k=4):
         from collections import deque
         from itertools import islice
@@ -299,47 +257,24 @@ class EmbeddingTask(FireTaskBase):
             Total number of embedded sentences.
         """
 
-        # -- shared queue (bounded so producer doesn't run too far ahead) --
-        _SENTINEL = object()
-        q: queue.Queue = queue.Queue(maxsize=2)
+        def get_documents(self, impulse_identifier: str, coll) -> list[str]:
+            stream = self.extract_stream(impulse_identifier, coll)
 
-        # -- producer: extraction pipeline (CPU / IO bound) --
-        def producer():
-            try:
-                for batch in self.get_documents_batched(
-                    impulse_identifier, db["colt"], batch_size
-                ):
-                    for item in batch:
-                        item["impulse_identifier"] = impulse_identifier
-                    q.put(batch)
-            except Exception as exc:
-                q.put(exc)
-            finally:
-                q.put(_SENTINEL)
+            full_text, char_map = self.build_document(stream)
 
-        producer_thread = threading.Thread(target=producer, daemon=True)
-        producer_thread.start()
+            sentences = self.split_sentences(full_text)
+            sentences = self.merge_broken_sentences(sentences)
 
-        total = 0
+            mapped = self.map_pages(sentences, full_text, char_map)
 
-        while True:
-            batch = q.get()
+            logger.info(f"Extracted {len(mapped)} sentences")
+            return mapped
 
-            if batch is _SENTINEL:
-                break
+        documents = get_documents(impulse_identifier, db["colt"], batch_size)
 
-            # Re-raise any exception thrown by the producer thread
-            if isinstance(batch, BaseException):
-                producer_thread.join()
-                raise batch
-
-            batch = self.embed(batch, model=model, batch_size=batch_size, k=8)
-            self.store(batch, coll=db["embeddings"])
-            total += len(batch)
-
-        producer_thread.join()
-        logger.success(f"Pipeline complete — {total} embeddings total")
-        return total
+        batch = self.embed(documents, model=model, batch_size=batch_size, k=256)
+        self.store(batch, coll=db["embeddings"])
+        return True
 
     def run_task(self, fw_spec: dict) -> FWAction:
         print("Now running embedding task")
