@@ -238,7 +238,7 @@ class EmbeddingTask(FireTaskBase):
         model: SentenceTransformer,
         impulse_identifier: str,
         db,
-        batch_size: int = 16,
+        batch_size: int = 4,
     ) -> int:
         """Stream extraction into embedding using a threaded producer/consumer.
 
@@ -280,9 +280,12 @@ class EmbeddingTask(FireTaskBase):
         client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
         db = client["praxis"]
 
+        import torch
+
         model = SentenceTransformer(
             "Qwen/Qwen3-Embedding-0.6B",
             device="cuda",
+            model_kwargs={"torch_dtype": torch.float16},
         )
         impulse_identifier = fw_spec.get("impulse_identifier")
         if not impulse_identifier:
