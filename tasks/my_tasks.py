@@ -207,7 +207,7 @@ class EmbeddingTask(FireTaskBase):
             print(len(i))
             embs.append(
                 model.encode(
-                    chunks,
+                    list(i),
                     batch_size=batch_size,
                     convert_to_numpy=True,
                     show_progress_bar=True,
