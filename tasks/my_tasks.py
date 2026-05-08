@@ -183,7 +183,7 @@ class EmbeddingTask(FireTaskBase):
         return results
 
     def embed(
-        self, items: list[dict], model: SentenceTransformer, batch_size: int = 16, k=4
+        self, items: list[dict], model: SentenceTransformer, batch_size: int = 4, k=4
     ):
         from collections import deque
         from itertools import islice, batched
@@ -291,7 +291,7 @@ class EmbeddingTask(FireTaskBase):
         if not impulse_identifier:
             raise ValueError("Missing impulse_identifier")
 
-        total = self._run_pipeline(model, impulse_identifier, db, batch_size=16)
+        total = self._run_pipeline(model, impulse_identifier, db, batch_size=4)
 
         return FWAction(stored_data={"num_embeddings": total})
 
