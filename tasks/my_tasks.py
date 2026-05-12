@@ -186,7 +186,7 @@ class EmbeddingTask(FireTaskBase):
         self, items: list[dict], model: SentenceTransformer, batch_size: int = 4, k=4
     ):
         from collections import deque
-        from itertools import islice
+        from itertools import islice, batched
 
         def sliding_window(iterable, k):
             iterator = iter(iterable)
@@ -199,16 +199,17 @@ class EmbeddingTask(FireTaskBase):
         chunks = [" ".join(c) for c in sliding_window(sentences, k)]
         print(f"Length of chunks: {len(chunks)}")
 
-        all_embeddings = model.encode(
-            chunks,
-            batch_size=16,
-            convert_to_numpy=True,
-            show_progress_bar=True,
-        )
-
         to_store = []
-        for chunk, emb in zip(chunks, all_embeddings):
-            to_store.append({"chunk": chunk, "embedding": emb.tolist()})
+        for batch_chunk in batched(chunks, 512):
+            all_embeddings = model.encode(
+                list(batch_chunk),
+                batch_size=16,
+                convert_to_numpy=True,
+                show_progress_bar=True,
+            )
+
+            for chunk, emb in zip(chunks, all_embeddings):
+                to_store.append({"chunk": chunk, "embedding": emb.tolist()})
 
         return to_store
 
