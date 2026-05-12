@@ -271,8 +271,10 @@ class EmbeddingTask(FireTaskBase):
             return mapped
 
         documents: list[dict] = get_documents(impulse_identifier, db["colt"])
-        batch = self.embed(documents, model=model, batch_size=batch_size, k=4)
-        self.store(batch, coll=db["embeddings"])
+        embedded_documents = self.embed(
+            documents, model=model, batch_size=batch_size, k=4
+        )
+        self.store(embedded_documents, coll=db["embeddings"])
         return True
 
     def run_task(self, fw_spec: dict) -> FWAction:
