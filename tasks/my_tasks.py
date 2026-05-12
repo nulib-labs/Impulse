@@ -200,10 +200,10 @@ class EmbeddingTask(FireTaskBase):
         print(f"Length of chunks: {len(chunks)}")
 
         to_store = []
-        for batch_chunk in batched(chunks, 1024):
+        for batch_chunk in batched(chunks, 256):
             all_embeddings = model.encode(
                 list(batch_chunk),
-                batch_size=16,
+                batch_size=8,
                 convert_to_numpy=True,
                 show_progress_bar=True,
             )
