@@ -11,6 +11,8 @@ wheels/
 
 my_launchpad.yaml
 my_launchpad.prod.yaml
+my_launchpad.staging.yaml
+my_launchpad*
 my_wf.yaml
 my_qadapter.yaml
 
