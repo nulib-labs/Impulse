@@ -221,7 +221,7 @@ class EmbeddingTask(FireTaskBase):
                     {
                         "impulse_identifier": item.get("impulse_identifier"),
                         "chunk": item["chunk"],
-                        "embedding_model": "Qwen3-Embedding-0.6B",
+                        "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
                         "impulse_identifier": impulse_identifier,
                     },
                     {"$set": item},
