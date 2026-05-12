@@ -215,7 +215,6 @@ class EmbeddingTask(FireTaskBase):
     def store(self, items, coll, impulse_identifier):
         ops = []
         for item in items:
-            print(item)
             ops.append(
                 UpdateOne(
                     {
