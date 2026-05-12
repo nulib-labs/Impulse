@@ -186,7 +186,7 @@ class EmbeddingTask(FireTaskBase):
         self, items: list[dict], model: SentenceTransformer, batch_size: int = 4, k=4
     ):
         from collections import deque
-        from itertools import islice, batched
+        from itertools import islice
 
         def sliding_window(iterable, k):
             iterator = iter(iterable)
@@ -212,7 +212,7 @@ class EmbeddingTask(FireTaskBase):
 
         return to_store
 
-    def store(self, items, coll):
+    def store(self, items, coll, impulse_identifier):
         ops = []
         for item in items:
             print(item)
@@ -222,6 +222,7 @@ class EmbeddingTask(FireTaskBase):
                         "impulse_identifier": item.get("impulse_identifier"),
                         "chunk": item["chunk"],
                         "embedding_model": "Qwen3-Embedding-0.6B",
+                        "impulse_identifier": impulse_identifier,
                     },
                     {"$set": item},
                     upsert=True,
@@ -274,7 +275,11 @@ class EmbeddingTask(FireTaskBase):
         embedded_documents = self.embed(
             documents, model=model, batch_size=batch_size, k=4
         )
-        self.store(embedded_documents, coll=db["embeddings"])
+        self.store(
+            embedded_documents,
+            coll=db["embeddings"],
+            impulse_identifier=impulse_identifier,
+        )
         return True
 
     def run_task(self, fw_spec: dict) -> FWAction:
