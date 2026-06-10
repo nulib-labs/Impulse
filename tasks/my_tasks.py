@@ -21,11 +21,11 @@ from pymongo import MongoClient
 from blingfire import text_to_sentences
 from tasks import common, config
 import tasks
-from tasks.common.s3 import upload_pil_image_to_s3
+from tasks.common.s3 import upload_pil_image_to_s3, s3_key_exists
 from tasks.helpers import _get_db, funcs, get_s3_content
 from dataclasses import dataclass, asdict
 from sentence_transformers import SentenceTransformer
-
+from tqdm import tqdm
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
 
@@ -790,18 +790,23 @@ class DocumentExtractionTask(FireTaskBase):
         for i, image_path in enumerate(path_array):
             if image_path.startswith('s3://'):
                 from tasks.common.s3 import download_s3_file
-                item = ImpulseInputItem(impulse_identifier,i+1,download_s3_file(image_path))
                 project_number = impulse_identifier.split("_")[0].lower()
                 accession_number = impulse_identifier.split("_")[1].lower()
-                filename = "_".join([project_number.lower(), accession_number.lower(), "raw_images", f"{i+1:010d}.jpg"]).lower()
-                key = "/".join([project_number, accession_number, filename])
-                print(f"Uploading to key: {key}")
-                upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
-                impulse_input_items.append(item)
+                filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
+                key = "/".join([project_number, accession_number, "raw_images", filename])
 
+                if not s3_key_exists("nu-impulse-data", key):
+                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    print(f"Uploading to key: {key}")
+                    upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
+                else:
+                    print(f"Skipping existing key: {key}")
+                    item = ImpulseInputItem(impulse_identifier, i+1, None)
+
+                impulse_input_items.append(item)
         impulse_output_items: list[ImpulseOutputItem] = []
         batch_size = 8
-        for batch in batched(impulse_input_items, batch_size):
+        for batch in tqdm(batched(impulse_input_items, batch_size)):
             batch_images = [item.image_data for item in batch]  # extract once
             batch_layout = layout_predictor(batch_images)
             batch_ocr = recognition_predictor(batch_images, batch_layout)

@@ -13,7 +13,7 @@ def download_s3_file(s3_uri: str):
         returns: bytes?
     """
 
-    session = boto3.Session()
+    session = boto3.Session(profile_name='impulse')
     s3 = session.client('s3')
     parsed_path = urlparse(s3_uri)
     bucket = parsed_path.netloc
@@ -48,7 +48,8 @@ def upload_pil_image_to_s3(
     buffer.seek(0)
 
     # 2. Upload to S3
-    s3 = boto3.client("s3", region_name=region)
+    session = boto3.Session(profile_name='impulse')
+    s3 = session.client("s3", region_name=region)
     s3.upload_fileobj(
         buffer,
         bucket,
@@ -59,3 +60,14 @@ def upload_pil_image_to_s3(
     url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
     print(f"Uploaded → {url}")
     return url
+
+def s3_key_exists(bucket: str, key: str) -> bool:
+    session = boto3.Session(profile_name='impulse')
+    s3 = session.client("s3")
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return False
+        raise
