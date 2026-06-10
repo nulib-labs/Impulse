@@ -24,10 +24,11 @@ if stderr:
     print("Error:", stderr.decode("utf-8"))
 else:
     output = stdout.decode("utf-8").splitlines()
+    print(output)
     output = [i.strip().replace("PRE ", "") for i in output if i.strip()]
 z = 0
 for i in output:
-    if not i.startswith("p1190"):
+    if not i.startswith("p1274"):
         continue
 
     launchpad: LaunchPad = LaunchPad(
@@ -52,16 +53,17 @@ for i in output:
         try:
             for j in page["Contents"]:
                 key = f"s3://nu-impulse-production/{j['Key']}"
-                if key.endswith("jpg") and "unprocessed" in key:
+                if key.endswith("jpg"):
                     impulse_keys.append(key)
                     print(key)
         except:
             continue
-
+    impulse_identifier = i.replace("/", "").lower().replace("}", "").replace("{", "")
+    print(impulse_identifier)
     ocr_fw: Firework = Firework(
         DocumentExtractionTask(),
         spec={
-            "impulse_identifier": i.replace("/", "").lower(),
+            "impulse_identifier": impulse_identifier,
             "find_path_array_in": "keys",
             "keys": impulse_keys,
         },
@@ -69,3 +71,4 @@ for i in output:
     )
 
     launchpad.add_wf(ocr_fw)
+    exit()

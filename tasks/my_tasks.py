@@ -5,6 +5,8 @@ import threading
 from typing import Generator, override
 from uuid import uuid4
 
+from PIL import Image
+import PIL
 from natsort import natsorted
 import boto3
 from bs4 import BeautifulSoup
@@ -16,17 +18,32 @@ from loguru import logger
 import numpy as np
 from pymongo import UpdateOne
 from pymongo import MongoClient
-
 from blingfire import text_to_sentences
-from tasks import config
+from tasks import common, config
+import tasks
+from tasks.common.s3 import upload_pil_image_to_s3
 from tasks.helpers import _get_db, funcs, get_s3_content
-
+from dataclasses import dataclass, asdict
 from sentence_transformers import SentenceTransformer
 
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
 
 SENTENCE_FILTER = re.compile(r"[a-zA-Z]{4,}")
+
+@dataclass
+class ImpulseItem:
+    """ Class for passing image meta/data to impulse."""
+    identifier: str
+    page_number: int
+@dataclass
+class ImpulseInputItem(ImpulseItem):
+    image_data: Image.Image
+
+@dataclass
+class ImpulseOutputItem(ImpulseItem):
+    layout_data: dict
+    ocr_data: dict
 
 
 class EmbeddingTask(FireTaskBase):
@@ -653,7 +670,7 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, model, collection, s3_base_path: str):
+    def save_to_mongo(self, model, collection):
         """Save any Pydantic model to MongoDB, with images stored in S3.
 
         Args:
@@ -746,13 +763,18 @@ class DocumentExtractionTask(FireTaskBase):
         ahead).  The main thread pulls from the queue, runs inference,
         and persists results to MongoDB.
         """
-        from chandra.model import InferenceManager
-        from itertools import batched
 
+        from surya.inference import SuryaInferenceManager
+        from surya.recognition import RecognitionPredictor
+        from surya.layout import LayoutPredictor
+        from itertools import batched
+        manager = SuryaInferenceManager()
+        recognition_predictor = RecognitionPredictor(manager)
+        layout_predictor = LayoutPredictor(manager)
         find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]
         path_array = natsorted(path_array)
-        batch_size: int = fw_spec.get("batch_size", 1)
+        
         impulse_identifier: str = fw_spec["impulse_identifier"]
         impulse_identifier = (
             impulse_identifier.replace("{", "")
@@ -764,84 +786,42 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
 
-        # Initialise chandra inference once and reuse across all images
-        logger.info("Initialising chandra InferenceManager...")
-        manager = InferenceManager(method="vllm")
-        logger.success("InferenceManager ready.")
+        impulse_input_items: list[ImpulseInputItem] = []
+        for i, image_path in enumerate(path_array):
+            if image_path.startswith('s3://'):
+                from tasks.common.s3 import download_s3_file
+                item = ImpulseInputItem(impulse_identifier,i+1,download_s3_file(image_path))
+                project_number = impulse_identifier.split("_")[0].lower()
+                accession_number = impulse_identifier.split("_")[1].lower()
+                filename = "_".join([project_number.lower(), accession_number.lower(), "raw_images", f"{i+1:010d}.jpg"]).lower()
+                key = "/".join([project_number, accession_number, filename])
+                print(f"Uploading to key: {key}")
+                upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
+                impulse_input_items.append(item)
 
-        # ------------------------------------------------------------------
-        # Producer / consumer setup
-        # ------------------------------------------------------------------
-        _SENTINEL = object()
-        prefetch_queue: queue.Queue = queue.Queue(maxsize=1)
+        impulse_output_items: list[ImpulseOutputItem] = []
+        batch_size = 8
+        for batch in batched(impulse_input_items, batch_size):
+            batch_images = [item.image_data for item in batch]  # extract once
+            batch_layout = layout_predictor(batch_images)
+            batch_ocr = recognition_predictor(batch_images, batch_layout)
 
-        def producer():
-            """Download & decode batches in a background thread."""
-            page_counter = 0
-            try:
-                for path_batch in batched(path_array, n=batch_size):
-                    batch_input_items, item_meta, page_counter = self._fetch_batch(
-                        path_batch, impulse_identifier, page_counter
+            for item, layout, ocr in zip(batch, batch_layout, batch_ocr):
+                impulse_output_items.append(
+                    ImpulseOutputItem(
+                        identifier=item.identifier,
+                        page_number=item.page_number,
+                        layout_data=layout,
+                        ocr_data=ocr,
                     )
-                    prefetch_queue.put((batch_input_items, item_meta))
-            except Exception as exc:
-                prefetch_queue.put(exc)
-            finally:
-                prefetch_queue.put(_SENTINEL)
-
-        producer_thread = threading.Thread(target=producer, daemon=True)
-        producer_thread.start()
-
-        # ------------------------------------------------------------------
-        # Main loop: consume prefetched batches → vLLM → MongoDB
-        # ------------------------------------------------------------------
-        while True:
-            batch = prefetch_queue.get()
-
-            if batch is _SENTINEL:
-                break
-
-            # Re-raise any exception from the producer thread
-            if isinstance(batch, BaseException):
-                producer_thread.join()
-                raise batch
-
-            batch_input_items, item_meta = batch
-
-            # ----------------------------------------------------------
-            # Phase 2: Single batched vLLM inference call
-            # ----------------------------------------------------------
-            results = self._predict_chandra_batch(batch_input_items, manager)
-
-            # ----------------------------------------------------------
-            # Phase 3: Reassemble results with metadata & persist
-            # ----------------------------------------------------------
-            contents: list[dict] = []
-            for meta, result in zip(item_meta, results):
-                contents.append(
-                    {
-                        **meta,
-                        "extraction_model": "chandra",
-                        "extracted_data": funcs.stringify_keys(
-                            {
-                                "html": result.html,
-                                "markdown": result.markdown,
-                                "chunks": result.chunks,
-                            }
-                        ),
-                        "confidence_summary": {
-                            "error": result.error,
-                            "token_count": result.token_count,
-                            "text_extraction_method": "chandra",
-                        },
-                    }
                 )
 
-            self.save_to_mongo(
-                contents,
-                collection=_get_db()["colt"],
-                s3_base_path="nu-impulse-production",
-            )
 
-        producer_thread.join()
-        return FWAction()
+        contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
+        print(contents)
+
+        self.save_to_mongo(
+            contents,
+            collection=_get_db()["colt"],
+        )
+        FWAction()

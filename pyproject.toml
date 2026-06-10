@@ -11,7 +11,6 @@ dependencies = [
   "blingfire>=0.1.8",
   "boto3>=1.42.2",
   "bs4>=0.0.2",
-  "chandra-ocr>=0.2.0",
   "codecarbon[carbonboard]>=3.2.2",
   "deskew>=1.5.3",
   "dotenv>=0.9.9",
@@ -36,9 +35,10 @@ dependencies = [
   "python-doctr>=1.0.0",
   "sentence-transformers[onnx]>=5.1.1",
   "spacy>=3.8.11",
-  "surya-ocr>=0.17.1",
   "transformers>=4.57.0",
   "pyyaml>=6.0",
+  "surya-ocr>=0.17.1",
+  "streamlit>=1.58.0",
 ]
 
 [project.scripts]
