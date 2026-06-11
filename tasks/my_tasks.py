@@ -1,4 +1,5 @@
 import io
+from math import floor
 import queue
 import re
 import threading
@@ -769,6 +770,7 @@ class DocumentExtractionTask(FireTaskBase):
         from surya.recognition import RecognitionPredictor
         from surya.layout import LayoutPredictor
         from itertools import batched
+        
         manager = SuryaInferenceManager()
         recognition_predictor = RecognitionPredictor(manager)
         layout_predictor = LayoutPredictor(manager)
@@ -807,7 +809,11 @@ class DocumentExtractionTask(FireTaskBase):
                 impulse_input_items.append(item)
         impulse_output_items: list[ImpulseOutputItem] = []
         batch_size = 8
-        for batch in tqdm(batched(impulse_input_items, batch_size)):
+        total = len(impulse_input_items) / batch_size
+
+        total = floor(total)
+
+        for batch in tqdm(batched(impulse_input_items, batch_size), total=total):
             batch_images = [item.image_data for item in batch]  # extract once
             batch_layout = layout_predictor(batch_images)
             batch_ocr = recognition_predictor(batch_images, batch_layout)
