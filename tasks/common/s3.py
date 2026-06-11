@@ -3,6 +3,7 @@ import io
 import boto3
 from io import BytesIO
 from PIL import Image
+from botocore.exceptions import ClientError
 
 def download_s3_file(s3_uri: str):
     """
