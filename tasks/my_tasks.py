@@ -44,6 +44,7 @@ class ImpulseInputItem(ImpulseItem):
 class ImpulseOutputItem(ImpulseItem):
     layout_data: dict
     ocr_data: dict
+    extraction_model: str = "surya-2"
 
 
 class EmbeddingTask(FireTaskBase):
@@ -670,21 +671,21 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, model, collection):
+    def save_to_mongo(self, items: list[dict], collection):
         """Save any Pydantic model to MongoDB, with images stored in S3.
 
         Args:
             s3_base_path: S3 URI prefix e.g. s3://your-bucket/images
         """
         operations = []
-        for i, page in enumerate(model):
+        for item in items:
             operations.append(
                 UpdateOne(
                     {
-                        "page_number": page["page_number"],
-                        "impulse_identifier": page["impulse_identifier"],
+                        "page_number": item.get("page_number"),
+                        "impulse_identifier": item.get("identifier"),
                     },
-                    {"$set": page},
+                    {"$set": item},
                     upsert=True,
                 )
             )
@@ -801,7 +802,7 @@ class DocumentExtractionTask(FireTaskBase):
                     upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
                 else:
                     print(f"Skipping existing key: {key}")
-                    item = ImpulseInputItem(impulse_identifier, i+1, None)
+                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
 
                 impulse_input_items.append(item)
         impulse_output_items: list[ImpulseOutputItem] = []
@@ -816,8 +817,8 @@ class DocumentExtractionTask(FireTaskBase):
                     ImpulseOutputItem(
                         identifier=item.identifier,
                         page_number=item.page_number,
-                        layout_data=layout,
-                        ocr_data=ocr,
+                        layout_data=layout.model_dump(),
+                        ocr_data=ocr.model_dump(),
                     )
                 )
 
