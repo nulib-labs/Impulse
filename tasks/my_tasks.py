@@ -16,7 +16,7 @@ from cv2.typing import MatLike
 from fireworks.core.firework import FWAction, FireTaskBase
 from loguru import logger
 import numpy as np
-from pymongo import UpdateOne
+from pymongo import ReplaceOne, UpdateOne
 from pymongo import MongoClient
 from blingfire import text_to_sentences
 from tasks import common, config
@@ -34,7 +34,7 @@ SENTENCE_FILTER = re.compile(r"[a-zA-Z]{4,}")
 @dataclass
 class ImpulseItem:
     """ Class for passing image meta/data to impulse."""
-    identifier: str
+    impulse_identifier: str
     page_number: int
 @dataclass
 class ImpulseInputItem(ImpulseItem):
@@ -680,12 +680,12 @@ class DocumentExtractionTask(FireTaskBase):
         operations = []
         for item in items:
             operations.append(
-                UpdateOne(
+                ReplaceOne(
                     {
                         "page_number": item.get("page_number"),
                         "impulse_identifier": item.get("identifier"),
                     },
-                    {"$set": item},
+                     item,
                     upsert=True,
                 )
             )
@@ -815,7 +815,7 @@ class DocumentExtractionTask(FireTaskBase):
             for item, layout, ocr in zip(batch, batch_layout, batch_ocr):
                 impulse_output_items.append(
                     ImpulseOutputItem(
-                        identifier=item.identifier,
+                        impulse_identifier=item.impulse_identifier,
                         page_number=item.page_number,
                         layout_data=layout.model_dump(),
                         ocr_data=ocr.model_dump(),
