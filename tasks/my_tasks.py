@@ -808,7 +808,7 @@ class DocumentExtractionTask(FireTaskBase):
 
                 impulse_input_items.append(item)
         impulse_output_items: list[ImpulseOutputItem] = []
-        batch_size = 8
+        batch_size = 4
         total = len(impulse_input_items) / batch_size
 
         total = floor(total)
