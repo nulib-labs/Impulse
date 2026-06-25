@@ -789,51 +789,50 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
 
-        impulse_input_items: list[ImpulseInputItem] = []
-        for i, image_path in enumerate(path_array):
-            if image_path.startswith('s3://'):
-                from tasks.common.s3 import download_s3_file
-                project_number = impulse_identifier.split("_")[0].lower()
-                accession_number = impulse_identifier.split("_")[1].lower()
-                filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
-                key = "/".join([project_number, accession_number, "raw_images", filename])
+        for batch in batched(enumerate(path_array), 4):
+            # Tuple of 4 path arrays
+            impulse_input_items: list[ImpulseInputItem] = []
+            for i, image_path in batch:
+                # i, image_data per image path in the batch of 4
+                if image_path.startswith('s3://'):
+                    from tasks.common.s3 import download_s3_file
+                    project_number = impulse_identifier.split("_")[0].lower()
+                    accession_number = impulse_identifier.split("_")[1].lower()
+                    filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
+                    key = "/".join([project_number, accession_number, "raw_images", filename])
 
-                if not s3_key_exists("nu-impulse-data", key):
-                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
-                    print(f"Uploading to key: {key}")
-                    upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
-                else:
-                    print(f"Skipping existing key: {key}")
-                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    if not s3_key_exists("nu-impulse-data", key):
+                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                        print(f"Uploading to key: {key}")
+                        upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
+                    else:
+                        print(f"Skipping existing key: {key}")
+                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
 
-                impulse_input_items.append(item)
-        impulse_output_items: list[ImpulseOutputItem] = []
-        batch_size = 4
-        total = len(impulse_input_items) / batch_size
+                    impulse_input_items.append(item)
+                
+                impulse_output_items: list[ImpulseOutputItem] = []
 
-        total = floor(total)
+                batch_images = [item.image_data for item in impulse_input_items]  # extract once
+                batch_layout = layout_predictor(batch_images)
+                batch_ocr = recognition_predictor(batch_images, batch_layout)
 
-        for batch in tqdm(batched(impulse_input_items, batch_size), total=total):
-            batch_images = [item.image_data for item in batch]  # extract once
-            batch_layout = layout_predictor(batch_images)
-            batch_ocr = recognition_predictor(batch_images, batch_layout)
-
-            for item, layout, ocr in zip(batch, batch_layout, batch_ocr):
-                impulse_output_items.append(
-                    ImpulseOutputItem(
-                        impulse_identifier=item.impulse_identifier,
-                        page_number=item.page_number,
-                        layout_data=layout.model_dump(),
-                        ocr_data=ocr.model_dump(),
+                for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
+                    impulse_output_items.append(
+                        ImpulseOutputItem(
+                            impulse_identifier=item.impulse_identifier,
+                            page_number=item.page_number,
+                            layout_data=layout.model_dump(),
+                            ocr_data=ocr.model_dump(),
+                        )
                     )
+
+
+                contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
+                print(contents)
+
+                self.save_to_mongo(
+                    contents,
+                    collection=_get_db()["colt"],
                 )
-
-
-        contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
-        print(contents)
-
-        self.save_to_mongo(
-            contents,
-            collection=_get_db()["colt"],
-        )
         FWAction()
