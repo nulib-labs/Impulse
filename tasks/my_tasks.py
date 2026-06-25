@@ -811,28 +811,28 @@ class DocumentExtractionTask(FireTaskBase):
 
                     impulse_input_items.append(item)
                 
-                impulse_output_items: list[ImpulseOutputItem] = []
+            impulse_output_items: list[ImpulseOutputItem] = []
 
-                batch_images = [item.image_data for item in impulse_input_items]  # extract once
-                batch_layout = layout_predictor(batch_images)
-                batch_ocr = recognition_predictor(batch_images, batch_layout)
+            batch_images = [item.image_data for item in impulse_input_items]  # extract once
+            batch_layout = layout_predictor(batch_images)
+            batch_ocr = recognition_predictor(batch_images, batch_layout)
 
-                for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
-                    impulse_output_items.append(
-                        ImpulseOutputItem(
-                            impulse_identifier=item.impulse_identifier,
-                            page_number=item.page_number,
-                            layout_data=layout.model_dump(),
-                            ocr_data=ocr.model_dump(),
-                        )
+            for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
+                impulse_output_items.append(
+                    ImpulseOutputItem(
+                        impulse_identifier=item.impulse_identifier,
+                        page_number=item.page_number,
+                        layout_data=layout.model_dump(),
+                        ocr_data=ocr.model_dump(),
                     )
-
-
-                contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
-                print(contents)
-
-                self.save_to_mongo(
-                    contents,
-                    collection=_get_db()["colt"],
                 )
+
+
+            contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
+            print(contents)
+
+            self.save_to_mongo(
+                contents,
+                collection=_get_db()["colt"],
+            )
         FWAction()
