@@ -752,32 +752,25 @@ class DocumentExtractionTask(FireTaskBase):
         return batch_input_items, item_meta, page_counter
 
     @override
-    def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
+    async def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """Run batched OCR extraction via vLLM with prefetched batches.
-
-        A background producer thread downloads and decodes the *next*
-        batch from S3 while the main thread runs vLLM inference on the
-        *current* batch.  This keeps the GPU busy instead of idling
-        during S3 downloads and image decoding.
-
-        The producer pushes ``(batch_input_items, item_meta)`` tuples
-        onto a bounded queue (``maxsize=1``, i.e. at most one batch
-        ahead).  The main thread pulls from the queue, runs inference,
-        and persists results to MongoDB.
+        Double-buffered: while vLLM runs inference on the current batch,
+        a background thread pool fetches/decodes the *next* batch from S3.
         """
-
         from surya.inference import SuryaInferenceManager
         from surya.recognition import RecognitionPredictor
         from surya.layout import LayoutPredictor
-        from itertools import batched
-        
+        from concurrent.futures import ThreadPoolExecutor
+        import itertools
+
         manager = SuryaInferenceManager()
         recognition_predictor = RecognitionPredictor(manager)
         layout_predictor = LayoutPredictor(manager)
+
         find_path_array_in: str = fw_spec["find_path_array_in"]
         path_array: list[str] = fw_spec[find_path_array_in]
         path_array = natsorted(path_array)
-        
+
         impulse_identifier: str = fw_spec["impulse_identifier"]
         impulse_identifier = (
             impulse_identifier.replace("{", "")
@@ -785,80 +778,73 @@ class DocumentExtractionTask(FireTaskBase):
             .replace("'", "")
             .lower()
         )
-
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
-        
 
-        def get_impulse_input_items_batch(batch):
-            impulse_input_items: list[ImpulseInputItem] = []            
+        def chunked(iterable, n):
+            it = iter(iterable)
+            while chunk := list(itertools.islice(it, n)):
+                yield chunk
+
+        def build_batch(batch) -> list[ImpulseInputItem]:
+            """Download + decode one batch of images. Runs on the executor thread."""
+            from tasks.common.s3 import download_s3_file
+
+            items: list[ImpulseInputItem] = []
             for i, image_path in batch:
-                # i, image_data per image path in the batch of 4
-                if image_path.startswith('s3://'):
-                    from tasks.common.s3 import download_s3_file
-                    project_number = impulse_identifier.split("_")[0].lower()
-                    accession_number = impulse_identifier.split("_")[1].lower()
-                    filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
-                    key = "/".join([project_number, accession_number, "raw_images", filename])
+                if not image_path.startswith("s3://"):
+                    continue
+                project_number = impulse_identifier.split("_")[0].lower()
+                accession_number = impulse_identifier.split("_")[1].lower()
+                filename = "_".join(
+                    [project_number, accession_number, f"{i+1:010d}.jpg"]
+                )
+                key = "/".join([project_number, accession_number, "raw_images", filename])
 
-                    if not s3_key_exists("nu-impulse-data", key):
-                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
-                        print(f"Uploading to key: {key}")
-                        upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
-                    else:
-                        print(f"Skipping existing key: {key}")
-                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                item = ImpulseInputItem(impulse_identifier, i + 1, download_s3_file(image_path))
+                if not s3_key_exists("nu-impulse-data", key):
+                    print(f"Uploading to key: {key}")
+                    upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
+                else:
+                    print(f"Skipping existing key: {key}")
+                items.append(item)
+            return items
 
-                    impulse_input_items.append(item)
-            return impulse_input_items
-       
-        _SENTINEL = object()
-        batch_queue: queue.Queue = queue.Queue(maxsize=1)
-        producer_error: list[BaseException] = []
-        
+        batches = list(chunked(list(enumerate(path_array)), 4))
 
-        def producer() -> None:
-            try:
-                for batch in batched(enumerate(path_array), 16):
-                    batch_queue.put(get_impulse_input_items_batch(batch))
-            except BaseException as exc:
-                producer_error.append(exc)
-            finally:
-                batch_queue.put(_SENTINEL)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            # Kick off fetch for batch 0 before the loop even starts.
+            next_future = executor.submit(build_batch, batches[0]) if batches else None
 
-        
+            for idx in range(len(batches)):
+                # Block only until the batch we need *right now* is ready.
+                impulse_input_items = next_future.result()
 
-        producer_thread = threading.Thread(target=producer, daemon=True)
-        producer_thread.start()
+                # Immediately hand the executor the NEXT batch to fetch,
+                # so it downloads in the background while we run inference below.
+                if idx + 1 < len(batches):
+                    next_future = executor.submit(build_batch, batches[idx + 1])
 
-        try:
-            while True:
-                impulse_input_items = batch_queue.get()
-                if impulse_input_items is _SENTINEL:
-                    if producer_error:
-                        raise producer_error[0]
-                    break
                 if not impulse_input_items:
                     continue
 
-            impulse_output_items: list[ImpulseOutputItem] = []
+                # --- vLLM inference runs here on the main thread; ---
+                # --- next_future is fetching batch idx+1 concurrently. ---
+                batch_images = [item.image_data for item in impulse_input_items]
+                batch_layout = layout_predictor(batch_images)
+                batch_ocr = recognition_predictor(batch_images, batch_layout)
 
-            batch_images = [item.image_data for item in impulse_input_items]  # extract once
-            batch_layout = layout_predictor(batch_images)
-            batch_ocr = recognition_predictor(batch_images, batch_layout)
+                impulse_output_items = [
+                    ImpulseOutputItem(
+                        impulse_identifier=item.impulse_identifier,
+                        page_number=item.page_number,
+                        layout_data=layout.model_dump(),
+                        ocr_data=ocr.model_dump(),
+                    )
+                    for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr)
+                ]
+                contents: list[dict] = [asdict(o) for o in impulse_output_items]
+                print(contents)
+                self.save_to_mongo(contents, collection=_get_db()["colt"])
 
-            impulse_output_items = [
-                ImpulseOutputItem(
-                    impulse_identifier=item.impulse_identifier,
-                    page_number=item.page_number,
-                    layout_data=layout.model_dump(),
-                    ocr_data=ocr.model_dump(),
-                )
-                for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr)
-            ]
-            contents: list[dict] = [asdict(o) for o in impulse_output_items]
-            print(contents)
-            self.save_to_mongo(contents, collection=_get_db()["colt"])
-        finally:
-            producer_thread.join(timeout=5)
-        FWAction()
+        return FWAction()
