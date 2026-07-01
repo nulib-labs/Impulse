@@ -752,7 +752,7 @@ class DocumentExtractionTask(FireTaskBase):
         return batch_input_items, item_meta, page_counter
 
     @override
-    async def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
+    def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
         """Run batched OCR extraction via vLLM with prefetched batches.
         Double-buffered: while vLLM runs inference on the current batch,
         a background thread pool fetches/decodes the *next* batch from S3.
