@@ -810,7 +810,7 @@ class DocumentExtractionTask(FireTaskBase):
                 items.append(item)
             return items
 
-        batches = list(chunked(list(enumerate(path_array)), 4))
+        batches = list(chunked(list(enumerate(path_array)), 16))
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             # Kick off fetch for batch 0 before the loop even starts.
