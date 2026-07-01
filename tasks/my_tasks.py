@@ -791,7 +791,6 @@ class DocumentExtractionTask(FireTaskBase):
         
 
         for batch in batched(enumerate(path_array), 16):
-            # Tuple of 4 path arrays
             impulse_input_items: list[ImpulseInputItem] = []
             for i, image_path in batch:
                 # i, image_data per image path in the batch of 4
@@ -837,3 +836,4 @@ class DocumentExtractionTask(FireTaskBase):
                 collection=_get_db()["colt"],
             )
         FWAction()
+
