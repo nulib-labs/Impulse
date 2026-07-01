@@ -788,10 +788,10 @@ class DocumentExtractionTask(FireTaskBase):
 
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
+        
 
-        for batch in batched(enumerate(path_array), 32):
-            # Tuple of 4 path arrays
-            impulse_input_items: list[ImpulseInputItem] = []
+        def get_impulse_input_items_batch(batch):
+            impulse_input_items: list[ImpulseInputItem] = []            
             for i, image_path in batch:
                 # i, image_data per image path in the batch of 4
                 if image_path.startswith('s3://'):
@@ -810,29 +810,55 @@ class DocumentExtractionTask(FireTaskBase):
                         item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
 
                     impulse_input_items.append(item)
-                
+            return impulse_input_items
+       
+        _SENTINEL = object()
+        batch_queue: queue.Queue = queue.Queue(maxsize=1)
+        producer_error: list[BaseException] = []
+        
+
+        def producer() -> None:
+            try:
+                for batch in batched(enumerate(path_array, 16)):
+                    batch_queue.put(get_impulse_input_items_batch(batch))
+            except BaseException as exc:
+                producer_error.append(exc)
+            finally:
+                batch_queue.put(_SENTINEL)
+
+        
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        try:
+            while True:
+                impulse_input_items = batch_queue.get()
+                if impulse_input_items is _SENTINEL:
+                    if producer_error:
+                        raise producer_error[0]
+                    break
+                if not impulse_input_items:
+                    continue
+
             impulse_output_items: list[ImpulseOutputItem] = []
 
             batch_images = [item.image_data for item in impulse_input_items]  # extract once
             batch_layout = layout_predictor(batch_images)
             batch_ocr = recognition_predictor(batch_images, batch_layout)
 
-            for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
-                impulse_output_items.append(
-                    ImpulseOutputItem(
-                        impulse_identifier=item.impulse_identifier,
-                        page_number=item.page_number,
-                        layout_data=layout.model_dump(),
-                        ocr_data=ocr.model_dump(),
-                    )
+            impulse_output_items = [
+                ImpulseOutputItem(
+                    impulse_identifier=item.impulse_identifier,
+                    page_number=item.page_number,
+                    layout_data=layout.model_dump(),
+                    ocr_data=ocr.model_dump(),
                 )
-
-
-            contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
+                for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr)
+            ]
+            contents: list[dict] = [asdict(o) for o in impulse_output_items]
             print(contents)
-
-            self.save_to_mongo(
-                contents,
-                collection=_get_db()["colt"],
-            )
+            self.save_to_mongo(contents, collection=_get_db()["colt"])
+        finally:
+            producer_thread.join(timeout=5)
         FWAction()
