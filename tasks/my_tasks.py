@@ -790,7 +790,7 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Type of `path_array`:{type(path_array)}")
         
 
-        for batch in batched(enumerate(path_array), 32):
+        for batch in batched(enumerate(path_array), 16):
             # Tuple of 4 path arrays
             impulse_input_items: list[ImpulseInputItem] = []
             for i, image_path in batch:
