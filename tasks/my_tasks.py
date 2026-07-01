@@ -819,7 +819,7 @@ class DocumentExtractionTask(FireTaskBase):
 
         def producer() -> None:
             try:
-                for batch in batched(enumerate(path_array, 16)):
+                for batch in batched(enumerate(path_array), 16):
                     batch_queue.put(get_impulse_input_items_batch(batch))
             except BaseException as exc:
                 producer_error.append(exc)
