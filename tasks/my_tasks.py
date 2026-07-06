@@ -801,11 +801,13 @@ class DocumentExtractionTask(FireTaskBase):
 
                 if not s3_key_exists("nu-impulse-data", key):
                     item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    impulse_input_items.append(item)
                     print(f"Uploading to key: {key}")
                     upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
                 else:
                     print(f"Skipping existing key: {key}")
                     item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    impulse_input_items.append(item)
 
 
         for batch in batched(enumerate(path_array), 16):
