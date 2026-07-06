@@ -814,11 +814,11 @@ class DocumentExtractionTask(FireTaskBase):
                 # i, image_data per image path in the batch of 4
                 t = threading.Thread(target=normalize_paths, args=(i, image_path))
                 threads.append(t)
-                for t in threads:
-                    t.start()
+            for t in threads:
+                t.start()
 
-                for t in threads:
-                    t.join()
+            for t in threads:
+                t.join()
 
                 
             impulse_output_items: list[ImpulseOutputItem] = []
