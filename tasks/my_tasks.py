@@ -789,27 +789,37 @@ class DocumentExtractionTask(FireTaskBase):
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
         
+        impulse_input_items: list[ImpulseInputItem] = []
+        
+        def normalize_paths(i, image_path):
+            if image_path.startswith('s3://'):
+                from tasks.common.s3 import download_s3_file
+                project_number = impulse_identifier.split("_")[0].lower()
+                accession_number = impulse_identifier.split("_")[1].lower()
+                filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
+                key = "/".join([project_number, accession_number, "raw_images", filename])
+
+                if not s3_key_exists("nu-impulse-data", key):
+                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    print(f"Uploading to key: {key}")
+                    upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
+                else:
+                    print(f"Skipping existing key: {key}")
+                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+
 
         for batch in batched(enumerate(path_array), 16):
-            impulse_input_items: list[ImpulseInputItem] = []
+            threads = []
             for i, image_path in batch:
                 # i, image_data per image path in the batch of 4
-                if image_path.startswith('s3://'):
-                    from tasks.common.s3 import download_s3_file
-                    project_number = impulse_identifier.split("_")[0].lower()
-                    accession_number = impulse_identifier.split("_")[1].lower()
-                    filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
-                    key = "/".join([project_number, accession_number, "raw_images", filename])
+                t = threading.Thread(target=normalize_paths, args=(i, image_path))
+                threads.append(t)
+                for t in threads:
+                    t.start()
 
-                    if not s3_key_exists("nu-impulse-data", key):
-                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
-                        print(f"Uploading to key: {key}")
-                        upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
-                    else:
-                        print(f"Skipping existing key: {key}")
-                        item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                for t in threads:
+                    t.join()
 
-                    impulse_input_items.append(item)
                 
             impulse_output_items: list[ImpulseOutputItem] = []
 
