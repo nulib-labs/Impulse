@@ -53,8 +53,7 @@ class METSXMLToHathiTrustManifestTask(FireTaskBase):
         s3_client = boto3.client("s3")
 
         # Convert string to bytes
-        s3_client.put_object(
-            Bucket=bucket,
+        s3_client.put_object( Bucket=bucket,
             Key=key,
             Body=content.encode("utf-8"),  # Encode string as bytes
         )

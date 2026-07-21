@@ -47,6 +47,64 @@ class ImpulseOutputItem(ImpulseItem):
     ocr_data: dict
     extraction_model: str = "surya-2"
 
+class IOTask(FireTaskBase):
+    _fw_name = "I/O Task"
+    def run_task(self, fw_spec: dict[str, list[str]]):
+        from itertools import batched
+        find_path_array_in: str = fw_spec["find_path_array_in"]
+        path_array: list[str] = fw_spec[find_path_array_in]
+        path_array = natsorted(path_array)
+
+        impulse_identifier: str = fw_spec["impulse_identifier"]
+        impulse_identifier = (
+            impulse_identifier.replace("{", "")
+            .replace("}", "")
+            .replace("'", "")
+            .lower()
+        )
+        logger.debug(f"Value of `path_array`:{path_array}")
+        logger.debug(f"Type of `path_array`:{type(path_array)}")
+
+        bucket = "nu-impulse-data"
+        impulse_input_items: list[ImpulseInputItem] = []
+        new_keys: list[str] = []
+        keys_lock = threading.Lock()
+        items_lock = threading.Lock()
+
+        def normalize_paths(i, image_path):
+            if image_path.startswith('s3://'):
+                from tasks.common.s3 import download_s3_file
+                project_number = impulse_identifier.split("_")[0].lower()
+                accession_number = impulse_identifier.split("_")[1].lower()
+                filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
+                key = "/".join([project_number, accession_number, "raw_images", filename])
+
+                item = ImpulseInputItem(impulse_identifier, i + 1, download_s3_file(image_path))
+                with items_lock:
+                    impulse_input_items.append(item)
+
+                if not s3_key_exists(bucket, key):
+                    print(f"Uploading to key: {key}")
+                    upload_pil_image_to_s3(item.image_data, bucket, key)
+                else:
+                    print(f"Skipping existing key: {key}")
+
+                with keys_lock:
+                    new_keys.append(f"s3://{bucket}/{key}")
+
+        for batch in batched(enumerate(path_array), 16):
+            threads = []
+            for i, image_path in batch:
+                t = threading.Thread(target=normalize_paths, args=(i, image_path))
+                threads.append(t)
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        new_keys = natsorted(new_keys)
+
+        return FWAction(update_spec={"keys": new_keys})
 
 class EmbeddingTask(FireTaskBase):
     _fw_name = "Embedding Task"
@@ -326,40 +384,27 @@ class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
     @staticmethod
-    def _save_content(output_path, content):
-        import cv2
-
-        _ = cv2.imwrite(output_path, content)
-        pass
-
-    @staticmethod
     def _to_array(content: bytes) -> np.ndarray:
         import cv2
 
         arr = np.frombuffer(content, np.uint8)
-        return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)  # actually decode it
+        return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
 
     @staticmethod
     def _binarize(arr: MatLike) -> MatLike:
+        import cv2
+
         if len(arr.shape) == 3:
             arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
         # arr is now guaranteed to be single-channel
         _, binarized = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return binarized
 
-        return binary
-
     @staticmethod
     def _denoise(array: MatLike) -> MatLike:
         import cv2
 
-        array_denoise = cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
-
-        return array_denoise
-
-    @staticmethod
-    def _process(content: bytes) -> None:
-        pass
+        return cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -380,9 +425,7 @@ class ImageProcessingTask(FireTaskBase):
         Returns:
             Tuple of (bucket, key)
         """
-        # Remove s3:// or s3a:// prefix
         path = re.sub(r"^s3a?://", "", s3_path)
-        # Split into bucket and key
         parts = path.split("/", 1)
         bucket = parts[0]
         key = parts[1] if len(parts) > 1 else ""
@@ -390,11 +433,11 @@ class ImageProcessingTask(FireTaskBase):
 
     def save_to_s3(self, s3_path: str, content: bytes) -> bool:
         """
-        Save string content to S3.
+        Save binary content to S3.
 
         Args:
             s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as a string
+            content: File content as bytes
         """
         logger.debug(f"s3_path: {s3_path}")
         bucket, key = self.parse_s3_path(s3_path)
@@ -405,7 +448,7 @@ class ImageProcessingTask(FireTaskBase):
         s3_client.put_object(
             Bucket=bucket,
             Key=key,
-            Body=content,  # Encode string as bytes
+            Body=content,
         )
         logger.success(f"Successfully saved file to s3: {key}")
         return True
@@ -414,14 +457,12 @@ class ImageProcessingTask(FireTaskBase):
     def _to_grayscale(arr: MatLike) -> MatLike:
         import cv2
 
-        return cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        # cv2.imdecode / imread produce BGR, not RGB — BGR2GRAY is correct here
+        return cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
 
     @staticmethod
     def _is_RGB(arr: MatLike) -> bool:
-        if len(arr.shape) == 3 and arr.shape[2] == 3:
-            return True
-        else:
-            return False
+        return len(arr.shape) == 3 and arr.shape[2] == 3
 
     @staticmethod
     def _encode_to_image(arr: MatLike, filetype: str) -> tuple[bytes, str]:
@@ -450,60 +491,85 @@ class ImageProcessingTask(FireTaskBase):
         """
         This method runs the image processing task.
         """
+        import cv2
+        from itertools import batched
+
         path_array_key = fw_spec.get("find_path_array_in", None)
         if not path_array_key:
             logger.critical("Critical spec keys missing. Abandoning.")
-            raise KeyError(f"Find path array not in spec!")
+            raise KeyError("Find path array not in spec!")
 
-        path_array: str | None = fw_spec.get(path_array_key, None)
-
+        path_array: list[str] | None = fw_spec.get(path_array_key, None)
         if not path_array:
             logger.critical("Critical spec keys missing. Abandoning.")
             raise KeyError(f"{path_array_key} not in spec!")
 
-        impulse_identifier = fw_spec.get(
-            "impulse_identifier", None
-        )  # The impulse identifier can be anything that would be a valid directory name in S3
-        impulse_identifier = uuid4() if not impulse_identifier else impulse_identifier
-        output_paths: list[tuple[str, str]] = []
-        import cv2
-        from pathlib import Path
+        path_array = natsorted(path_array)
 
-        for path in path_array:
-            logger.info(f"`path` is {path}")
-            if self.is_s3_path(path):
-                filestem = Path(path.split("/")[-1])
+        impulse_identifier = fw_spec.get("impulse_identifier", None)
+        impulse_identifier = str(uuid4()) if not impulse_identifier else impulse_identifier
+        impulse_identifier = (
+            impulse_identifier.replace("{", "")
+            .replace("}", "")
+            .replace("'", "")
+            .lower()
+        )
 
+        project_number = impulse_identifier.split("_")[0].lower()
+        accession_number = impulse_identifier.split("_")[1].lower()
+
+        new_keys: list[str] = []
+        keys_lock = threading.Lock()
+
+        def process_one(i: int, path: str) -> None:
+            if not self.is_s3_path(path):
+                logger.warning(f"Skipping non-S3 path: {path}")
+                return
+
+            filename = "_".join(
+                [project_number, accession_number, f"{i+1:010d}.jpg"]
+            )
+            key = "/".join(
+                [project_number, accession_number, "binarized_images", filename]
+            )
+
+            if s3_key_exists("nu-impulse-data", key):
+                print(f"Skipping existing key: {key}")
+            else:
                 content = get_s3_content(path)
-
-                # Fix 1: actually decode the image
                 raw_arr = cv2.imdecode(
                     np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED
                 )
                 if raw_arr is None:
                     logger.error(f"Failed to decode image at {path}, skipping.")
-                    continue
+                    return
 
                 if self._is_RGB(raw_arr):
                     raw_arr = self._to_grayscale(raw_arr)
 
                 bin_arr: MatLike = self._binarize(raw_arr)
                 dst_arr: MatLike = self._denoise(bin_arr)
-                buffer, filetype = self._encode_to_image(dst_arr, ".jp2")
 
-                output_s3_path = "/".join(
-                    [
-                        "nu-impulse-production",
-                        "DATA",
-                        str(impulse_identifier).upper(),
-                        str(filestem.with_suffix(filetype)),
-                    ]
-                )
-                logger.info("Meow")
-                # Fix 2: always save, buffer is already bytes
-                self.save_to_s3("".join(["s3://", output_s3_path]), buffer)
+                encoded_bytes, _ = self._encode_to_image(dst_arr, ".jpg")
+                self.save_to_s3(f"s3://nu-impulse-data/{key}", encoded_bytes)
+                print(f"Uploaded to key: {key}")
 
-        return FWAction()
+            with keys_lock:
+                new_keys.append(key)
+
+        for batch in batched(enumerate(path_array), 16):
+            threads = [
+                threading.Thread(target=process_one, args=(i, path))
+                for i, path in batch
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        new_keys = natsorted(new_keys)
+
+        return FWAction(update_spec={"keys": new_keys})
 
 
 class DocumentExtractionTask(FireTaskBase):
