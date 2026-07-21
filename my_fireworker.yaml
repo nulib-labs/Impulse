@@ -1,3 +1,7 @@
 name: my first fireworker
 category: ''
-query: '{}'
+# Skip GPU-bound fireworks on this CPU-only host. Filters out any firework
+# whose task list contains "Document Extraction Task" (see IOTask,
+# DocumentExtractionTask, ImageProcessingTask _fw_name values in
+# tasks/my_tasks.py).
+query: '{"spec._tasks._fw_name": {"$ne": "Document Extraction Task"}}'

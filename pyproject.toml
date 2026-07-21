@@ -23,7 +23,7 @@ dependencies = [
   "mplcursors>=0.7",
   "natsort>=8.4.0",
   "ollama>=0.6.1",
-  "opencv-python>=4.12.0.88",
+  "opencv-python-headless>=4.11.0.86",
   "pandas>=2.3.3",
   "pdf2image>=1.17.0",
   "pillow>=10.4.0",
@@ -44,6 +44,13 @@ dependencies = [
 [project.scripts]
 impulse-orchestrator = "tasks.orchestrator.watcher:main"
 impulse-cleanup = "scripts.cleanup_instances:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = true
 
 [tool.basedpyright]
 typeCheckingMode = "basic"
