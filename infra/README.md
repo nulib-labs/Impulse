@@ -50,6 +50,55 @@ terraform init
 terraform apply
 ```
 
+## Bootstrapping remote state (one-time)
+
+State currently lives locally in `infra/terraform.tfstate`, which is git-ignored
+and therefore not shared between operators. To move it to a shared, versioned,
+encrypted S3 backend with DynamoDB-based locking:
+
+```bash
+# 1. Create the state bucket (versioning + SSE-S3 + block public access).
+aws s3api create-bucket \
+  --region us-east-1 \
+  --bucket impulse-terraform-state-548317354126
+
+aws s3api put-bucket-versioning \
+  --bucket impulse-terraform-state-548317354126 \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --bucket impulse-terraform-state-548317354126 \
+  --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+aws s3api put-public-access-block \
+  --bucket impulse-terraform-state-548317354126 \
+  --public-access-block-configuration \
+    'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true'
+
+# 2. Create the state-lock table.
+aws dynamodb create-table \
+  --region us-east-1 \
+  --table-name impulse-terraform-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+
+# 3. Uncomment the `backend "s3"` block in main.tf.
+# 4. Migrate local state into the bucket.
+cd infra
+terraform init -migrate-state
+# Terraform will prompt: "Do you want to copy existing state to the new backend?" -> yes
+
+# 5. After migration succeeds, the local terraform.tfstate is no longer authoritative.
+#    It's already git-ignored; safe to delete or leave in place.
+rm -f terraform.tfstate terraform.tfstate.backup
+```
+
+After bootstrapping, every operator running `terraform init` in this directory
+will read/write the shared state in S3, with DynamoDB preventing concurrent
+applies from stepping on each other.
+
 ### Set secret values (out-of-band, never in TF state)
 
 ```bash

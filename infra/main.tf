@@ -5,6 +5,21 @@ terraform {
       version = "6.52.0"
     }
   }
+
+  # Remote state: S3 for storage, DynamoDB for locking.
+  # Bootstrap steps (one-time, per README.md "Bootstrapping remote state"):
+  #   1. Create the bucket + DynamoDB table manually with the AWS CLI.
+  #   2. Uncomment this block.
+  #   3. Run `terraform init -migrate-state` to move any local state up.
+  # Until step 1 is complete, leave this block commented out.
+  #
+  # backend "s3" {
+  #   bucket         = "impulse-terraform-state-548317354126"
+  #   key            = "fireworks-webgui/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   dynamodb_table = "impulse-terraform-locks"
+  #   encrypt        = true
+  # }
 }
 
 provider "aws" {
