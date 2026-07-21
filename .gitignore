@@ -25,3 +25,14 @@ ec2_config.yaml
 
 # ignore docker data
 data/
+
+# Terraform: provider binaries, state, plan files, backups, and crash logs.
+# .terraform.lock.hcl is intentionally NOT ignored (it should be committed).
+infra/.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log

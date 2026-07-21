@@ -1,0 +1,17 @@
+# Minimal FireWorks WebGUI image — only the deps needed to serve the dashboard.
+FROM python:3.13-slim
+
+RUN pip install --no-cache-dir \
+      "fireworks>=2.0.8" \
+      "pymongo[srv]>=4.15.2" \
+      "flask" \
+      "flask-paginate" \
+      "gunicorn" \
+      "matplotlib"
+
+# my_launchpad.yaml is bind-mounted at runtime (contains the read-only Atlas URI).
+WORKDIR /app
+
+# Bind to localhost inside the container's network namespace; Caddy proxies to it.
+# Credentials are injected via WEBGUI_USERNAME / WEBGUI_PASSWORD env vars.
+ENTRYPOINT ["sh", "-c", "exec lpad -l /app/my_launchpad.yaml webgui --server_mode --host 0.0.0.0 --port 8080 --nworkers 4 --webgui_username \"$WEBGUI_USERNAME\" --webgui_password \"$WEBGUI_PASSWORD\""]

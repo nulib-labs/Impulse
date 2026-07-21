@@ -1,0 +1,91 @@
+#!/bin/bash
+set -euxo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FireWorks WebGUI bootstrap
+#   - installs Docker + Caddy
+#   - pulls read-only Atlas URI + basic-auth creds from Secrets Manager
+#   - builds & runs the WebGUI container (gunicorn on 127.0.0.1:8080)
+#   - fronts it with Caddy (auto HTTPS via sslip.io)
+# ─────────────────────────────────────────────────────────────────────────────
+
+REGION="${region}"
+MONGODB_SECRET="${mongodb_secret}"
+BASICAUTH_SECRET="${basicauth_secret}"
+EIP="${eip}"
+DOMAIN="fireworks.$${EIP//./-}.sslip.io"
+
+dnf update -y
+dnf install -y docker jq
+
+systemctl enable --now docker
+
+# ── Install Caddy (static binary from official repo) ─────────────────────────
+dnf install -y 'dnf-command(copr)'
+dnf copr enable -y @caddy/caddy epel-9-x86_64 || true
+dnf install -y caddy || {
+  # Fallback: fetch static binary
+  curl -sSL "https://caddyserver.com/api/download?os=linux&arch=amd64" -o /usr/bin/caddy
+  chmod +x /usr/bin/caddy
+  useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy || true
+}
+
+# ── Fetch secrets ────────────────────────────────────────────────────────────
+mkdir -p /opt/fireworks
+cd /opt/fireworks
+
+MONGODB_URI=$(aws secretsmanager get-secret-value --region "$REGION" \
+  --secret-id "$MONGODB_SECRET" --query SecretString --output text)
+
+BASIC_AUTH_JSON=$(aws secretsmanager get-secret-value --region "$REGION" \
+  --secret-id "$BASICAUTH_SECRET" --query SecretString --output text)
+WEBGUI_USERNAME=$(echo "$BASIC_AUTH_JSON" | jq -r .username)
+WEBGUI_PASSWORD=$(echo "$BASIC_AUTH_JSON" | jq -r .password)
+
+# ── LaunchPad config for the read-only user ──────────────────────────────────
+cat > /opt/fireworks/my_launchpad.yaml <<EOF
+host: $MONGODB_URI
+uri_mode: true
+port: 27017
+name: fireworks
+username: null
+password: null
+logdir: null
+strm_lvl: INFO
+EOF
+chmod 600 /opt/fireworks/my_launchpad.yaml
+
+# ── Build the WebGUI image ────────────────────────────────────────────────────
+cat > /opt/fireworks/Dockerfile <<'DOCKER'
+FROM python:3.13-slim
+RUN pip install --no-cache-dir \
+      "fireworks>=2.0.8" \
+      "pymongo[srv]>=4.15.2" \
+      "flask" \
+      "flask-paginate" \
+      "gunicorn" \
+      "matplotlib"
+WORKDIR /app
+ENTRYPOINT ["sh", "-c", "exec lpad -l /app/my_launchpad.yaml webgui --server_mode --host 0.0.0.0 --port 8080 --nworkers 4 --webgui_username \"$WEBGUI_USERNAME\" --webgui_password \"$WEBGUI_PASSWORD\""]
+DOCKER
+
+docker build -t fireworks-webgui /opt/fireworks
+
+# ── Run the container (bound to loopback; Caddy is the only public listener) ──
+docker rm -f fireworks-webgui 2>/dev/null || true
+docker run -d --name fireworks-webgui --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  -e WEBGUI_USERNAME="$WEBGUI_USERNAME" \
+  -e WEBGUI_PASSWORD="$WEBGUI_PASSWORD" \
+  -v /opt/fireworks/my_launchpad.yaml:/app/my_launchpad.yaml:ro \
+  fireworks-webgui
+
+# ── Caddy reverse proxy with automatic HTTPS ─────────────────────────────────
+cat > /etc/caddy/Caddyfile <<EOF
+$DOMAIN {
+    reverse_proxy 127.0.0.1:8080
+}
+EOF
+
+systemctl enable --now caddy
+systemctl restart caddy
