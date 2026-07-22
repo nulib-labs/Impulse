@@ -384,27 +384,153 @@ class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
     @staticmethod
-    def _to_array(content: bytes) -> np.ndarray:
+    def _decode(content: bytes) -> MatLike | None:
+        """Decode raw image bytes into an OpenCV array.
+
+        Returns None if the bytes could not be decoded.
+        """
         import cv2
 
         arr = np.frombuffer(content, np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
 
     @staticmethod
-    def _binarize(arr: MatLike) -> MatLike:
+    def _denoise_gray(arr: MatLike) -> MatLike:
+        """Denoise a single-channel grayscale image.
+
+        Runs a small median filter (kills salt-and-pepper scan speckle
+        without blurring stroke edges), then a gentle Non-Local Means
+        pass. Must be run BEFORE binarization — running NLM on a bilevel
+        mask does nothing useful.
+        """
         import cv2
 
-        if len(arr.shape) == 3:
-            arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
-        # arr is now guaranteed to be single-channel
-        _, binarized = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return binarized
+        arr = cv2.medianBlur(arr, 3)
+        return cv2.fastNlMeansDenoising(
+            arr, None, h=7, templateWindowSize=7, searchWindowSize=21
+        )
 
     @staticmethod
-    def _denoise(array: MatLike) -> MatLike:
+    def _normalize_illumination(gray: MatLike) -> MatLike:
+        """Flatten uneven scan lighting / shadows / page-curl gradients.
+
+        Estimates the background via a large morphological close, then
+        divides the input by that background. The result has a near-
+        uniform bright background so downstream local thresholding
+        performs much more consistently.
+
+        The structuring-element size scales with the shorter image
+        dimension so this works across DPIs.
+        """
         import cv2
 
-        return cv2.fastNlMeansDenoising(array, None, 10, 7, 21)
+        h, w = gray.shape[:2]
+        k = max(15, (min(h, w) // 30) | 1)  # odd, ~3% of short side
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+        # cv2.divide handles zero-background pixels safely and clips to uint8.
+        return cv2.divide(gray, background, scale=255)
+
+    @staticmethod
+    def _binarize_adaptive(
+        gray: MatLike, k: float = 0.34, R: float = 128.0
+    ) -> MatLike:
+        """Sauvola adaptive binarization.
+
+        Threshold per pixel is::
+
+            T(x, y) = mean(x, y) * (1 + k * (std(x, y) / R - 1))
+
+        with ``k`` a sensitivity parameter (Sauvola & Pietikäinen 2000
+        recommend ~0.2–0.5; 0.34 is a good default for scanned text)
+        and ``R`` the dynamic range of standard deviation (128 for
+        8-bit imagery).
+
+        Implementation uses OpenCV integral images so per-pixel local
+        mean/std are computed in O(N) regardless of window size.
+
+        The window size scales with the shorter image dimension so the
+        same code works at arbitrary DPI.
+        """
+        import cv2
+
+        if gray.ndim == 3:
+            gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+
+        h, w = gray.shape[:2]
+        win = max(15, (min(h, w) // 40) | 1)  # odd, ~2.5% of short side
+        r = win // 2
+
+        g = gray.astype(np.float32)
+        g2 = g * g
+
+        # Integral images: shape (h+1, w+1)
+        S = cv2.integral(g, sdepth=cv2.CV_64F)
+        S2 = cv2.integral(g2, sdepth=cv2.CV_64F)
+
+        # Pad-index trick: for each pixel (y, x) we want the box
+        # [y-r .. y+r] x [x-r .. x+r], clipped to image bounds.
+        ys = np.arange(h)
+        xs = np.arange(w)
+        y0 = np.clip(ys - r, 0, h)
+        y1 = np.clip(ys + r + 1, 0, h)
+        x0 = np.clip(xs - r, 0, w)
+        x1 = np.clip(xs + r + 1, 0, w)
+
+        # Broadcast to (h, w) index arrays.
+        Y0 = y0[:, None]
+        Y1 = y1[:, None]
+        X0 = x0[None, :]
+        X1 = x1[None, :]
+
+        area = (Y1 - Y0) * (X1 - X0)
+        # Guard against zero-area boxes (shouldn't happen, but be safe).
+        area = np.where(area == 0, 1, area).astype(np.float64)
+
+        sum_ = S[Y1, X1] - S[Y0, X1] - S[Y1, X0] + S[Y0, X0]
+        sum_sq = S2[Y1, X1] - S2[Y0, X1] - S2[Y1, X0] + S2[Y0, X0]
+
+        mean = sum_ / area
+        # Variance clamped to zero to avoid tiny negatives from FP noise.
+        var = np.maximum(sum_sq / area - mean * mean, 0.0)
+        std = np.sqrt(var)
+
+        threshold = mean * (1.0 + k * ((std / R) - 1.0))
+        binary = np.where(g >= threshold, 255, 0).astype(np.uint8)
+        return binary
+
+    @staticmethod
+    def _deskew(binary: MatLike) -> MatLike:
+        """Estimate page skew from the binary image and rotate to correct.
+
+        The ``deskew`` package expects ink-as-high, so we pass an
+        inverted copy for angle detection only. Angles outside
+        ``[0.1°, 15°]`` (absolute) are ignored — smaller is noise,
+        larger is almost certainly a bad estimate on a sparse page.
+
+        Rotation is done on the binary itself with cubic interpolation
+        and white border fill so exposed corners match the page
+        background and don't confuse downstream OCR.
+        """
+        import cv2
+        from deskew import determine_skew
+
+        angle = determine_skew(cv2.bitwise_not(binary))
+        if angle is None:
+            return binary
+        if abs(angle) < 0.1 or abs(angle) > 15.0:
+            return binary
+
+        h, w = binary.shape[:2]
+        M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+        return cv2.warpAffine(
+            binary,
+            M,
+            (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=255,
+        )
 
     @staticmethod
     def is_s3_path(path: str) -> bool:
@@ -527,7 +653,7 @@ class ImageProcessingTask(FireTaskBase):
                 return
 
             filename = "_".join(
-                [project_number, accession_number, f"{i+1:010d}.jpg"]
+                [project_number, accession_number, f"{i+1:010d}.png"]
             )
             key = "/".join(
                 [project_number, accession_number, "binarized_images", filename]
@@ -537,20 +663,31 @@ class ImageProcessingTask(FireTaskBase):
                 print(f"Skipping existing key: {key}")
             else:
                 content = get_s3_content(path)
-                raw_arr = cv2.imdecode(
-                    np.frombuffer(content, np.uint8), cv2.IMREAD_UNCHANGED
-                )
+                raw_arr = self._decode(content)
                 if raw_arr is None:
                     logger.error(f"Failed to decode image at {path}, skipping.")
                     return
 
-                if self._is_RGB(raw_arr):
-                    raw_arr = self._to_grayscale(raw_arr)
+                # Pipeline:
+                #   grayscale -> denoise -> illumination-normalize
+                #             -> adaptive (Sauvola) binarize -> deskew
+                # Robustly reduce to a single channel regardless of whether
+                # the source is grayscale, BGR, or BGRA.
+                if raw_arr.ndim == 3:
+                    if raw_arr.shape[2] == 4:
+                        gray = cv2.cvtColor(raw_arr, cv2.COLOR_BGRA2GRAY)
+                    elif raw_arr.shape[2] == 3:
+                        gray = self._to_grayscale(raw_arr)
+                    else:
+                        gray = raw_arr[..., 0]
+                else:
+                    gray = raw_arr
+                gray = self._denoise_gray(gray)
+                gray = self._normalize_illumination(gray)
+                binary: MatLike = self._binarize_adaptive(gray)
+                binary = self._deskew(binary)
 
-                bin_arr: MatLike = self._binarize(raw_arr)
-                dst_arr: MatLike = self._denoise(bin_arr)
-
-                encoded_bytes, _ = self._encode_to_image(dst_arr, ".jpg")
+                encoded_bytes, _ = self._encode_to_image(binary, ".png")
                 self.save_to_s3(f"s3://nu-impulse-data/{key}", encoded_bytes)
                 print(f"Uploaded to key: {key}")
 
