@@ -398,17 +398,17 @@ class ImageProcessingTask(FireTaskBase):
     def _denoise_gray(arr: MatLike) -> MatLike:
         """Denoise a single-channel grayscale image.
 
-        Runs a small median filter (kills salt-and-pepper scan speckle
-        without blurring stroke edges), then a gentle Non-Local Means
-        pass. Must be run BEFORE binarization — running NLM on a bilevel
-        mask does nothing useful.
+        Uses a small median filter, which is cheap and kills salt-and-
+        pepper scan speckle without blurring stroke edges. We deliberately
+        avoid ``fastNlMeansDenoising`` here: it is dramatically more
+        expensive (seconds per multi-megapixel page) and offers little
+        additional benefit once illumination normalization + Sauvola do
+        the heavy lifting. On a multi-worker pipeline the NLM cost
+        (both CPU and RAM) is the main cause of OOM crashes.
         """
         import cv2
 
-        arr = cv2.medianBlur(arr, 3)
-        return cv2.fastNlMeansDenoising(
-            arr, None, h=7, templateWindowSize=7, searchWindowSize=21
-        )
+        return cv2.medianBlur(arr, 3)
 
     @staticmethod
     def _normalize_illumination(gray: MatLike) -> MatLike:
@@ -462,11 +462,16 @@ class ImageProcessingTask(FireTaskBase):
         r = win // 2
 
         g = gray.astype(np.float32)
+        # Integral images: shape (h+1, w+1).
+        # S can safely be float32 (max value 255*W*H fits in 24-bit mantissa
+        # for realistic page sizes). S2 must stay float64 — squared pixel
+        # sums grow ~65k× faster and would lose precision in float32 on
+        # high-res scans.
+        S = cv2.integral(g, sdepth=cv2.CV_32F)
         g2 = g * g
-
-        # Integral images: shape (h+1, w+1)
-        S = cv2.integral(g, sdepth=cv2.CV_64F)
         S2 = cv2.integral(g2, sdepth=cv2.CV_64F)
+        # Drop the per-pixel intermediates as soon as their integrals exist.
+        del g, g2
 
         # Pad-index trick: for each pixel (y, x) we want the box
         # [y-r .. y+r] x [x-r .. x+r], clipped to image bounds.
@@ -496,7 +501,7 @@ class ImageProcessingTask(FireTaskBase):
         std = np.sqrt(var)
 
         threshold = mean * (1.0 + k * ((std / R) - 1.0))
-        binary = np.where(g >= threshold, 255, 0).astype(np.uint8)
+        binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
         return binary
 
     @staticmethod
@@ -618,7 +623,18 @@ class ImageProcessingTask(FireTaskBase):
         This method runs the image processing task.
         """
         import cv2
-        from itertools import batched
+        import os
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Cap OpenCV's internal thread pool. When we run several page
+        # pipelines concurrently, each calling into OpenCV, the library's
+        # own OpenMP/pthread pool multiplies with our worker count and
+        # causes oversubscription — the process either thrashes or gets
+        # OOM-killed, which surfaces as a hard "crash" under tmux.
+        try:
+            cv2.setNumThreads(2)
+        except Exception:
+            pass
 
         path_array_key = fw_spec.get("find_path_array_in", None)
         if not path_array_key:
@@ -659,50 +675,68 @@ class ImageProcessingTask(FireTaskBase):
                 [project_number, accession_number, "binarized_images", filename]
             )
 
-            if s3_key_exists("nu-impulse-data", key):
-                print(f"Skipping existing key: {key}")
-            else:
-                content = get_s3_content(path)
-                raw_arr = self._decode(content)
-                if raw_arr is None:
-                    logger.error(f"Failed to decode image at {path}, skipping.")
-                    return
-
-                # Pipeline:
-                #   grayscale -> denoise -> illumination-normalize
-                #             -> adaptive (Sauvola) binarize -> deskew
-                # Robustly reduce to a single channel regardless of whether
-                # the source is grayscale, BGR, or BGRA.
-                if raw_arr.ndim == 3:
-                    if raw_arr.shape[2] == 4:
-                        gray = cv2.cvtColor(raw_arr, cv2.COLOR_BGRA2GRAY)
-                    elif raw_arr.shape[2] == 3:
-                        gray = self._to_grayscale(raw_arr)
-                    else:
-                        gray = raw_arr[..., 0]
+            try:
+                if s3_key_exists("nu-impulse-data", key):
+                    print(f"Skipping existing key: {key}")
                 else:
-                    gray = raw_arr
-                gray = self._denoise_gray(gray)
-                gray = self._normalize_illumination(gray)
-                binary: MatLike = self._binarize_adaptive(gray)
-                binary = self._deskew(binary)
+                    content = get_s3_content(path)
+                    raw_arr = self._decode(content)
+                    if raw_arr is None:
+                        logger.error(f"Failed to decode image at {path}, skipping.")
+                        return
 
-                encoded_bytes, _ = self._encode_to_image(binary, ".png")
-                self.save_to_s3(f"s3://nu-impulse-data/{key}", encoded_bytes)
-                print(f"Uploaded to key: {key}")
+                    # Pipeline:
+                    #   grayscale -> denoise -> illumination-normalize
+                    #             -> adaptive (Sauvola) binarize -> deskew
+                    # Robustly reduce to a single channel regardless of whether
+                    # the source is grayscale, BGR, or BGRA.
+                    if raw_arr.ndim == 3:
+                        if raw_arr.shape[2] == 4:
+                            gray = cv2.cvtColor(raw_arr, cv2.COLOR_BGRA2GRAY)
+                        elif raw_arr.shape[2] == 3:
+                            gray = self._to_grayscale(raw_arr)
+                        else:
+                            gray = raw_arr[..., 0]
+                    else:
+                        gray = raw_arr
+                    # Free the decoded source promptly to reduce peak RAM.
+                    del raw_arr
+                    gray = self._denoise_gray(gray)
+                    gray = self._normalize_illumination(gray)
+                    binary: MatLike = self._binarize_adaptive(gray)
+                    del gray
+                    binary = self._deskew(binary)
+
+                    encoded_bytes, _ = self._encode_to_image(binary, ".png")
+                    del binary
+                    self.save_to_s3(f"s3://nu-impulse-data/{key}", encoded_bytes)
+                    print(f"Uploaded to key: {key}")
+            except Exception as exc:
+                # Never let one bad page kill the whole run. Log and move on.
+                logger.exception(f"Failed to process {path}: {exc}")
+                return
 
             with keys_lock:
                 new_keys.append(key)
 
-        for batch in batched(enumerate(path_array), 16):
-            threads = [
-                threading.Thread(target=process_one, args=(i, path))
-                for i, path in batch
+        # Bounded worker pool. The pipeline is CPU + RAM heavy (Sauvola
+        # allocates several float64 arrays the size of the image, and
+        # deskew runs a Hough transform), so we deliberately keep the
+        # concurrency low. Env var lets ops tune per-host.
+        max_workers = int(os.environ.get("IMPULSE_IMG_WORKERS", "4"))
+        max_workers = max(1, max_workers)
+        logger.info(
+            f"Processing {len(path_array)} images with {max_workers} workers"
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(process_one, i, path)
+                for i, path in enumerate(path_array)
             ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            for fut in as_completed(futures):
+                # Surface any unexpected exception that escaped process_one.
+                fut.result()
 
         new_keys = natsorted(new_keys)
 
