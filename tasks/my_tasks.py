@@ -92,7 +92,7 @@ class IOTask(FireTaskBase):
                 with keys_lock:
                     new_keys.append(f"s3://{bucket}/{key}")
 
-        for batch in batched(enumerate(path_array), 16):
+        for batch in batched(enumerate(path_array), 4):
             threads = []
             for i, image_path in batch:
                 t = threading.Thread(target=normalize_paths, args=(i, image_path))
