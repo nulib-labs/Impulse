@@ -8,7 +8,6 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "accelerate>=1.12.0",
-  "blingfire>=0.1.8",
   "boto3>=1.42.2",
   "bs4>=0.0.2",
   "codecarbon[carbonboard]>=3.2.2",
@@ -39,6 +38,8 @@ dependencies = [
   "pyyaml>=6.0",
   "surya-ocr>=0.17.1",
   "streamlit>=1.58.0",
+  "torch==2.10.0",
+  "torchvision==0.25.0",
 ]
 
 [project.scripts]
@@ -73,6 +74,13 @@ exclude = [
 
 [tool.uv.sources]
 impulse = { workspace = true }
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" }]
+torchvision = [{ index = "pytorch-cu130", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov", "moto[s3,sqs,ecs]", "mongomock"]

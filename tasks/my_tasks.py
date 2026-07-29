@@ -19,7 +19,6 @@ from loguru import logger
 import numpy as np
 from pymongo import ReplaceOne, UpdateOne
 from pymongo import MongoClient
-from blingfire import text_to_sentences
 from tasks import common, config
 import tasks
 from tasks.common.s3 import upload_pil_image_to_s3, s3_key_exists
@@ -1047,7 +1046,7 @@ class DocumentExtractionTask(FireTaskBase):
                     impulse_input_items.append(item)
 
 
-        for batch in batched(enumerate(path_array), 16):
+        for batch in batched(enumerate(path_array), 64):
             threads = []
             for i, image_path in batch:
                 # i, image_data per image path in the batch of 4
