@@ -24,6 +24,13 @@ export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 # Tell FireWorks where to find FW_config.yaml (holds ADD_USER_PACKAGES: [tasks]).
 export FW_CONFIG_FILE="${REPO_ROOT}/FW_config.yaml"
 
+# Point Surya at the locally-running vLLM Docker container instead of letting it
+# spawn its own. Must be the OpenAI-compatible base (ends in /v1); Surya derives
+# the /health probe by stripping /v1. AUTOSTART=False makes an unreachable URL
+# fail fast with a clear error instead of trying to spawn a container.
+export SURYA_INFERENCE_URL="http://127.0.0.1:8000/v1"
+export SURYA_INFERENCE_AUTOSTART=False
+
 # Activate the local venv if present.
 if [ -f "${REPO_ROOT}/.venv/bin/activate" ]; then
     # shellcheck disable=SC1091
