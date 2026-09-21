@@ -36,3 +36,9 @@ infra/.terraform/
 tfplan
 crash.log
 crash.*.log
+
+cli
+
+.env
+
+uv.lock
