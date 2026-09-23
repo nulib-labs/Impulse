@@ -33,7 +33,7 @@ def upload_pil_image_to_s3(
     image: Image.Image,
     bucket: str,
     key: str,
-    region: str = "us-east-1",
+    region: str = AWS_REGION,
 ) -> str:
     """
     Upload a PIL Image to S3 as a JPEG.

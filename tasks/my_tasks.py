@@ -983,6 +983,8 @@ class DocumentExtractionTask(FireTaskBase):
         from surya.recognition import RecognitionPredictor
         from surya.layout import LayoutPredictor
         from itertools import batched
+        from tasks.common.s3 import download_s3_file        
+        from urllib.parse import urlparse
         
         manager = SuryaInferenceManager()
         recognition_predictor = RecognitionPredictor(manager)
@@ -1005,17 +1007,15 @@ class DocumentExtractionTask(FireTaskBase):
         impulse_input_items: list[ImpulseInputItem] = []
         
         def prepare_input_items(i, image_path):
-            if image_path.startswith('s3://'):
-                from tasks.common.s3 import download_s3_file
-
-                if s3_key_exists(S3_BUCKET, image_path):
-                    item = ImpulseInputItem(
-                        impulse_identifier=impulse_identifier,
-                        page_number=i + 1,
-                        image_data=download_s3_file(image_path),
-                        source_path=image_path,
-                    )
-                    impulse_input_items.append(item)
+            if s3_key_exists(S3_BUCKET, image_path):
+                print("found s3 item")
+                item = ImpulseInputItem(
+                    impulse_identifier=impulse_identifier,
+                    page_number=i + 1,
+                    image_data=download_s3_file(f"s3://{S3_BUCKET}/{image_path}"),
+                    source_path=image_path,
+                )
+                impulse_input_items.append(item)
 
 
         for batch in batched(enumerate(path_array), 64):
