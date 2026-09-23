@@ -959,7 +959,7 @@ class DocumentExtractionTask(FireTaskBase):
 
             s3.put_object(
                 Bucket=S3_BUCKET,
-                Key="jobs" + "/" key.split(".")[0] + ".json",
+                Key="jobs" + "/" + key.split(".")[0] + ".json",
                 Body=json.dumps(payload).encode("utf-8"),
                 ContentType="application/json",
             )
