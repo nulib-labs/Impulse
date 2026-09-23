@@ -989,46 +989,8 @@ class DocumentExtractionTask(FireTaskBase):
         
         impulse_input_items: list[ImpulseInputItem] = []
         
-        def normalize_paths(i, image_path):
-            if image_path.startswith('s3://'):
-                from tasks.common.s3 import download_s3_file
-                project_number = impulse_identifier.split("_")[0].lower()
-                accession_number = impulse_identifier.split("_")[1].lower()
-                filename = "_".join([project_number, accession_number, f"{i+1:010d}.jpg"])
-                key = "/".join([project_number, accession_number, "raw_images", filename])
-
-                if not s3_key_exists("nu-impulse-data", key):
-                    item = ImpulseInputItem(
-                        impulse_identifier=impulse_identifier,
-                        page_number=i + 1,
-                        image_data=download_s3_file(image_path),
-                        source_path=image_path,
-                    )
-                    impulse_input_items.append(item)
-                    print(f"Uploading to key: {key}")
-                    upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
-                else:
-                    print(f"Skipping existing key: {key}")
-                    item = ImpulseInputItem(
-                        impulse_identifier=impulse_identifier,
-                        page_number=i + 1,
-                        image_data=download_s3_file(image_path),
-                        source_path=image_path,
-                    )
-                    impulse_input_items.append(item)
-
 
         for batch in batched(enumerate(path_array), 64):
-            threads = []
-            for i, image_path in batch:
-                # i, image_data per image path in the batch of 4
-                t = threading.Thread(target=normalize_paths, args=(i, image_path))
-                threads.append(t)
-            for t in threads:
-                t.start()
-
-            for t in threads:
-                t.join()
 
                 
             impulse_output_items: list[ImpulseOutputItem] = []
