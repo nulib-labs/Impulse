@@ -939,7 +939,7 @@ class DocumentExtractionTask(FireTaskBase):
             items: ImpulseOutputItem instances, each with a source_path
                 pointing at the S3 key to write the JSON to.
         """
-        session = boto3.Session(profile_name="impulse")
+        session = boto3.Session(profile_name=AWS_PROFILE)
         s3_client = session.client("s3")
 
         for item in items:
@@ -955,7 +955,7 @@ class DocumentExtractionTask(FireTaskBase):
 
             s3_client.put_object(
                 Bucket=bucket,
-                Key=key,
+                Key=key.split(".")[0] + ".json",
                 Body=json.dumps(payload).encode("utf-8"),
                 ContentType="application/json",
             )
