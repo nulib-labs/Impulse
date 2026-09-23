@@ -21,7 +21,7 @@ COLLECTION = os.environ.get("MONGO_COLLECTION", "my_collection")
 BUCKET = os.environ.get("S3_BUCKET", "my-bucket")
 PREFIX = os.environ.get("S3_PREFIX", "jobs").strip("/")
 IDENTIFIER_STARTS_WITH = "p1274"
-FIELDS = ("ocr_data", "layout_data", "extraction_model")
+FIELDS = ("ocr_data", "layout_data", "extraction_model", "impulse_identifier")
 
 
 def unique_identifiers(coll):
