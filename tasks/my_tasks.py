@@ -1010,31 +1010,35 @@ class DocumentExtractionTask(FireTaskBase):
         
         impulse_input_items: list[ImpulseInputItem] = []
         
-        def handle_txt_format(item: ImpulseOutputItem):
-            session = boto3.Session(
-                profile_name=AWS_PROFILE,
-                region_name=AWS_REGION,
-            )
+        def handle_txt_format(items: list[ImpulseOutputItem]):
+            for item in items:
+                try:
+                    session = boto3.Session(
+                        profile_name=AWS_PROFILE,
+                        region_name=AWS_REGION,
+                    )
 
-            s3 = session.client("s3")
+                    s3 = session.client("s3")
 
-            ocr_data: dict = item.ocr_data
-            payload = []
-            for block in ocr_data["blocks"]:
-                html_raw = block.get("html", "")
-                soup = BeautifulSoup(html_raw, "html.parser")
-                soup2 = soup.get_text()
-                payload.append(soup2)
-            
+                    ocr_data: dict = item.ocr_data
+                    payload = []
+                    for block in ocr_data["blocks"]:
+                        html_raw = block.get("html", "")
+                        soup = BeautifulSoup(html_raw, "html.parser")
+                        soup2 = soup.get_text()
+                        payload.append(soup2)
+                    
 
-            payload = "\n".join(payload)
+                    payload = "\n".join(payload)
+                except Exception as e:
+                    raise e
 
-            s3.put_object(
-                Bucket=S3_BUCKET,
-                Key="jobs" + "/" + item.source_path.split(".")[0] + ".txt",
-                Body=payload.encode("utf-8"),
-                ContentType="application/json",
-            )
+                s3.put_object(
+                    Bucket=S3_BUCKET,
+                    Key="jobs" + "/" + item.source_path.split(".")[0] + ".txt",
+                    Body=payload.encode("utf-8"),
+                    ContentType="application/json",
+                )
 
 
 
@@ -1081,10 +1085,11 @@ class DocumentExtractionTask(FireTaskBase):
 
 
             contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
-            print(contents)
-
             self.save_to_s3(
                 impulse_output_items,
             )
+            handle_txt_format(impulse_output_items)
+
+
         FWAction()
 
