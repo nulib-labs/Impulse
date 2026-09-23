@@ -27,6 +27,22 @@ from tasks.helpers import _get_db, funcs, get_s3_content
 from dataclasses import dataclass, asdict
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+import os
+
+MONGO_URI = os.environ.get(
+    "MONGO_URI",
+    "mongodb://localhost:27017",
+)
+
+MONGO_DB = os.environ.get(
+    "MONGO_DB",
+    "fireworks",
+)
+
+S3_BUCKET = os.environ["S3_BUCKET"]
+AWS_PROFILE = os.environ["AWS_PROFILE"]
+AWS_REGION = os.environ["AWS_REGION"]
+
 SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
 
@@ -992,7 +1008,7 @@ class DocumentExtractionTask(FireTaskBase):
             if image_path.startswith('s3://'):
                 from tasks.common.s3 import download_s3_file
 
-                if not s3_key_exists("nu-impulse-data", image_path):
+                if not s3_key_exists(S3_BUCKET, image_path):
                     item = ImpulseInputItem(
                         impulse_identifier=impulse_identifier,
                         page_number=i + 1,
@@ -1003,6 +1019,7 @@ class DocumentExtractionTask(FireTaskBase):
 
 
         for batch in batched(enumerate(path_array), 64):
+            print("starting threads")
             threads = []
             for i, image_path in batch:
                 # i, image_data per image path in the batch of 4
