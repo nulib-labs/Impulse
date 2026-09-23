@@ -1013,6 +1013,7 @@ class DocumentExtractionTask(FireTaskBase):
         def handle_txt_format(items: list[ImpulseOutputItem]):
             for item in items:
                 try:
+                    print("Handling TXT")
                     session = boto3.Session(
                         profile_name=AWS_PROFILE,
                         region_name=AWS_REGION,
@@ -1030,15 +1031,17 @@ class DocumentExtractionTask(FireTaskBase):
                     
 
                     payload = "\n".join(payload)
-                except Exception as e:
-                    raise e
-
-                s3.put_object(
+                
+                    key ="jobs" + "/" + item.source_path.split(".")[0] + ".txt" 
+                    s3.put_object(
                     Bucket=S3_BUCKET,
-                    Key="jobs" + "/" + item.source_path.split(".")[0] + ".txt",
+                    Key=key,
                     Body=payload.encode("utf-8"),
                     ContentType="application/json",
                 )
+                except Exception as e:
+                    raise e
+            
 
 
 
