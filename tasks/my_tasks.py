@@ -1017,7 +1017,7 @@ class DocumentExtractionTask(FireTaskBase):
                 )
                 return item
 
-        for path in enumerate(natsorted(path_array)):
+        for i, path in enumerate(natsorted(path_array)):
             impulse_input_items.append(prepare_input_items(i, path))
 
 
