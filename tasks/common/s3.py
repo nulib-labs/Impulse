@@ -54,7 +54,7 @@ def upload_pil_image_to_s3(
     buffer.seek(0)
 
     # 2. Upload to S3
-    session = boto3.Session(profile_name=AWS_PROFILE)
+    session = boto3.Session(profile_name=AWS_PROFILE, region=AWS_REGION)
     s3 = session.client("s3", region_name=region)
     s3.upload_fileobj(
         buffer,
