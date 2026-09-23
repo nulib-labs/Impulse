@@ -982,7 +982,7 @@ class DocumentExtractionTask(FireTaskBase):
         ahead).  The main thread pulls from the queue, runs inference,
         and persists results to MongoDB.
         """
-
+        from bs4 import BeautifulSoup
         from surya.inference import SuryaInferenceManager
         from surya.recognition import RecognitionPredictor
         from surya.layout import LayoutPredictor
@@ -1010,6 +1010,34 @@ class DocumentExtractionTask(FireTaskBase):
         
         impulse_input_items: list[ImpulseInputItem] = []
         
+        def handle_txt_format(item: ImpulseOutputItem):
+            session = boto3.Session(
+                profile_name=AWS_PROFILE,
+                region_name=AWS_REGION,
+            )
+
+            s3 = session.client("s3")
+
+            ocr_data: dict = item.ocr_data
+            payload = []
+            for block in ocr_data["blocks"]:
+                html_raw = block.get("html", "")
+                soup = BeautifulSoup(html_raw, "html.parser")
+                soup2 = soup.get_text()
+                payload.append(soup2)
+            
+
+            payload = "\n".join(payload)
+
+            s3.put_object(
+                Bucket=S3_BUCKET,
+                Key="jobs" + "/" + item.source_path.split(".")[0] + ".txt",
+                Body=payload.encode("utf-8"),
+                ContentType="application/json",
+            )
+
+
+
         def prepare_input_items(i, image_path):
             if s3_key_exists(S3_BUCKET, image_path):
                 print("found s3 item")
