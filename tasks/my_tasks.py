@@ -1015,26 +1015,17 @@ class DocumentExtractionTask(FireTaskBase):
                     image_data=download_s3_file(f"s3://{S3_BUCKET}/{image_path}"),
                     source_path=image_path,
                 )
-                impulse_input_items.append(item)
+                return item
+
+        for path in enumerate(natsorted(path_array)):
+            impulse_input_items.append(prepare_input_items(i, path))
 
 
-        for batch in batched(enumerate(path_array), 64):
-            print("starting threads")
-            threads = []
-            for i, image_path in batch:
-                # i, image_data per image path in the batch of 4
-                t = threading.Thread(target=prepare_input_items, args=(i, image_path))
-                threads.append(t)
-            for t in threads:
-                t.start()
-
-            for t in threads:
-                t.join()
-
+        for batch in batched(impulse_input_items, 64):
                 
             impulse_output_items: list[ImpulseOutputItem] = []
 
-            batch_images = [item.image_data for item in impulse_input_items]  # extract once
+            batch_images = [item.image_data for item in batch]  # extract once
             batch_layout = layout_predictor(batch_images)
             batch_ocr = recognition_predictor(batch_images, batch_layout)
 
