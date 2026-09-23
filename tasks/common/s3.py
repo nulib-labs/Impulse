@@ -4,6 +4,11 @@ import boto3
 from io import BytesIO
 from PIL import Image
 from botocore.exceptions import ClientError
+import os
+
+S3_BUCKET = os.environ["S3_BUCKET"]
+AWS_PROFILE = os.environ["AWS_PROFILE"]
+AWS_REGION = os.environ["AWS_REGION"]
 
 def download_s3_file(s3_uri: str):
     """
@@ -14,7 +19,7 @@ def download_s3_file(s3_uri: str):
         returns: bytes?
     """
 
-    session = boto3.Session(profile_name='impulse')
+    session = boto3.Session(profile_name=AWS_PROFILE)
     s3 = session.client('s3')
     parsed_path = urlparse(s3_uri)
     bucket = parsed_path.netloc
@@ -49,7 +54,7 @@ def upload_pil_image_to_s3(
     buffer.seek(0)
 
     # 2. Upload to S3
-    session = boto3.Session(profile_name='impulse')
+    session = boto3.Session(profile_name=AWS_PROFILE)
     s3 = session.client("s3", region_name=region)
     s3.upload_fileobj(
         buffer,
@@ -63,7 +68,7 @@ def upload_pil_image_to_s3(
     return url
 
 def s3_key_exists(bucket: str, key: str) -> bool:
-    session = boto3.Session(profile_name='impulse')
+    session = boto3.Session(profile_name=AWS_PROFILE)
     s3 = session.client("s3")
     try:
         s3.head_object(Bucket=bucket, Key=key)
