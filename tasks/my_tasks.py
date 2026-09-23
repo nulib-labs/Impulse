@@ -943,7 +943,6 @@ class DocumentExtractionTask(FireTaskBase):
                 Body=json.dumps(payload).encode("utf-8"),
                 ContentType="application/json",
             )
-
             logger.success(f"Successfully saved file to s3: {key}")
 
         return True
@@ -989,8 +988,31 @@ class DocumentExtractionTask(FireTaskBase):
         
         impulse_input_items: list[ImpulseInputItem] = []
         
+        def prepare_input_items(i, image_path):
+            if image_path.startswith('s3://'):
+                from tasks.common.s3 import download_s3_file
+
+                if not s3_key_exists("nu-impulse-data", image_path):
+                    item = ImpulseInputItem(
+                        impulse_identifier=impulse_identifier,
+                        page_number=i + 1,
+                        image_data=download_s3_file(image_path),
+                        source_path=image_path,
+                    )
+                    impulse_input_items.append(item)
+
 
         for batch in batched(enumerate(path_array), 64):
+            threads = []
+            for i, image_path in batch:
+                # i, image_data per image path in the batch of 4
+                t = threading.Thread(target=prepare_input_items, args=(i, image_path))
+                threads.append(t)
+            for t in threads:
+                t.start()
+
+            for t in threads:
+                t.join()
 
                 
             impulse_output_items: list[ImpulseOutputItem] = []
