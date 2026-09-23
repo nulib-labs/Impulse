@@ -1008,7 +1008,7 @@ class DocumentExtractionTask(FireTaskBase):
             if image_path.startswith('s3://'):
                 from tasks.common.s3 import download_s3_file
 
-                if not s3_key_exists(S3_BUCKET, image_path):
+                if s3_key_exists(S3_BUCKET, image_path):
                     item = ImpulseInputItem(
                         impulse_identifier=impulse_identifier,
                         page_number=i + 1,
