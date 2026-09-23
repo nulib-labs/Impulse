@@ -1,4 +1,5 @@
 import io
+import json
 from math import floor
 import queue
 import re
@@ -36,14 +37,17 @@ class ImpulseItem:
     """ Class for passing image meta/data to impulse."""
     impulse_identifier: str
     page_number: int
+
 @dataclass
 class ImpulseInputItem(ImpulseItem):
     image_data: Image.Image
+    source_path: str
 
 @dataclass
-class ImpulseOutputItem(ImpulseItem):
+class ImpulseOutputItem(ImpulseInputItem):
     layout_data: dict
     ocr_data: dict
+    data_save_path: str
     extraction_model: str = "surya-2"
 
 class IOTask(FireTaskBase):
@@ -662,57 +666,104 @@ class ImageProcessingTask(FireTaskBase):
         new_keys: list[str] = []
         keys_lock = threading.Lock()
 
+        def sibling_key(path: str, new_extension: str) -> str:
+            """
+            Return the S3 key for a sibling file with a different extension.
+
+            Example:
+                s3://bucket/foo/bar/page.png
+                -> foo/bar/page.jp2
+            """
+            bucket, key = self.parse_s3_path(path)
+            if not key:
+                raise ValueError(f"Invalid S3 path: {path}")
+
+            base, _ = os.path.splitext(key)
+            return f"{base}{new_extension}"
+
         def process_one(i: int, path: str) -> None:
             if not self.is_s3_path(path):
                 logger.warning(f"Skipping non-S3 path: {path}")
                 return
 
-            filename = "_".join(
-                [project_number, accession_number, f"{i+1:010d}.png"]
-            )
-            key = "/".join(
-                [project_number, accession_number, "binarized_images", filename]
-            )
-
             try:
-                if s3_key_exists("nu-impulse-data", key):
-                    print(f"Skipping existing key: {key}")
-                else:
-                    content = get_s3_content(path)
-                    raw_arr = self._decode(content)
-                    if raw_arr is None:
-                        logger.error(f"Failed to decode image at {path}, skipping.")
-                        return
+                bucket, source_key = self.parse_s3_path(path)
 
-                    # Pipeline:
-                    #   grayscale -> denoise -> illumination-normalize
-                    #             -> adaptive (Sauvola) binarize -> deskew
-                    # Robustly reduce to a single channel regardless of whether
-                    # the source is grayscale, BGR, or BGRA.
-                    if raw_arr.ndim == 3:
-                        if raw_arr.shape[2] == 4:
-                            gray = cv2.cvtColor(raw_arr, cv2.COLOR_BGRA2GRAY)
-                        elif raw_arr.shape[2] == 3:
-                            gray = self._to_grayscale(raw_arr)
-                        else:
-                            gray = raw_arr[..., 0]
+                # The transformed image is a sibling of the source image.
+                output_key = sibling_key(path, ".jp2")
+
+                if s3_key_exists(bucket, output_key):
+                    logger.info(
+                        f"Skipping existing transformed image: "
+                        f"s3://{bucket}/{output_key}"
+                    )
+                    with keys_lock:
+                        new_keys.append(output_key)
+                    return
+
+                content = get_s3_content(path)
+
+                raw_arr = self._decode(content)
+                if raw_arr is None:
+                    logger.error(
+                        f"Failed to decode image at {path}, skipping."
+                    )
+                    return
+
+                # Pipeline:
+                #   grayscale
+                #       -> denoise
+                #       -> illumination normalization
+                #       -> Sauvola binarization
+                #       -> deskew
+                if raw_arr.ndim == 3:
+                    if raw_arr.shape[2] == 4:
+                        gray = cv2.cvtColor(
+                            raw_arr,
+                            cv2.COLOR_BGRA2GRAY,
+                        )
+                    elif raw_arr.shape[2] == 3:
+                        gray = self._to_grayscale(raw_arr)
                     else:
-                        gray = raw_arr
-                    # Free the decoded source promptly to reduce peak RAM.
-                    del raw_arr
-                    gray = self._denoise_gray(gray)
-                    gray = self._normalize_illumination(gray)
-                    binary: MatLike = self._binarize_adaptive(gray)
-                    del gray
-                    binary = self._deskew(binary)
+                        gray = raw_arr[..., 0]
+                else:
+                    gray = raw_arr
 
-                    encoded_bytes, _ = self._encode_to_image(binary, ".png")
-                    del binary
-                    self.save_to_s3(f"s3://nu-impulse-data/{key}", encoded_bytes)
-                    print(f"Uploaded to key: {key}")
+                del raw_arr
+
+                gray = self._denoise_gray(gray)
+                gray = self._normalize_illumination(gray)
+
+                binary: MatLike = self._binarize_adaptive(gray)
+                del gray
+
+                binary = self._deskew(binary)
+
+                # Encode the processed image as JPEG 2000.
+                encoded_bytes, _ = self._encode_to_image(
+                    binary,
+                    ".jp2",
+                )
+                del binary
+
+                self.save_to_s3(
+                    f"s3://{bucket}/{output_key}",
+                    encoded_bytes,
+                )
+
+                logger.success(
+                    f"Uploaded transformed image: "
+                    f"s3://{bucket}/{output_key}"
+                )
+
+                with keys_lock:
+                    new_keys.append(output_key)
+
             except Exception as exc:
-                # Never let one bad page kill the whole run. Log and move on.
-                logger.exception(f"Failed to process {path}: {exc}")
+                # Never let one bad page kill the whole run.
+                logger.exception(
+                    f"Failed to process {path}: {exc}"
+                )
                 return
 
             with keys_lock:
@@ -803,49 +854,6 @@ class DocumentExtractionTask(FireTaskBase):
 
         return None
 
-    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
-        """
-        Save string content to S3.
-
-        Args:
-            s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as a string
-        """
-        logger.debug(f"s3_path: {s3_path}")
-        bucket, key = self.parse_s3_path(s3_path)
-
-        session = boto3.Session(profile_name="impulse")
-        s3_client = session.client("s3")
-
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content,  # Encode string as bytes
-        )
-        logger.success(f"Successfully saved file to s3: {key}")
-        return True
-
-    @staticmethod
-    def _load_images(image_bytes: bytes, file_ext: str):
-        """Decode raw bytes into a list of PIL images.
-
-        A single-page image produces a one-element list; a PDF is expanded
-        into one image per page.
-
-        Args:
-            image_bytes: Raw file bytes (image or PDF).
-            file_ext: File extension (e.g. ``'png'``, ``'pdf'``, ``'jpg'``).
-
-        Returns:
-            list[PIL.Image.Image]
-        """
-        from chandra.input import load_pdf_images
-        from PIL import Image
-
-        if file_ext == "pdf":
-            return load_pdf_images(io.BytesIO(image_bytes))
-        return [Image.open(io.BytesIO(image_bytes)).convert("RGB")]
-
     @staticmethod
     def _predict_chandra_batch(batch_input_items, manager):
         """Send an already-assembled list of BatchInputItems to vLLM in one call.
@@ -908,84 +916,38 @@ class DocumentExtractionTask(FireTaskBase):
         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         return img
 
-    def save_to_mongo(self, items: list[dict], collection):
-        """Save any Pydantic model to MongoDB, with images stored in S3.
+    def save_to_s3(self, items: list[ImpulseOutputItem]) -> bool:
+        """Save each item's OCR/layout output as a single JSON file in S3.
 
         Args:
-            s3_base_path: S3 URI prefix e.g. s3://your-bucket/images
+            items: ImpulseOutputItem instances, each with a source_path
+                pointing at the S3 key to write the JSON to.
         """
-        operations = []
+        session = boto3.Session(profile_name="impulse")
+        s3_client = session.client("s3")
+
         for item in items:
-            operations.append(
-                ReplaceOne(
-                    {
-                        "page_number": item.get("page_number"),
-                        "impulse_identifier": item.get("identifier"),
-                    },
-                     item,
-                    upsert=True,
-                )
+            s3_path = item.source_path
+            logger.debug(f"s3_path: {s3_path}")
+            bucket, key = self.parse_s3_path(s3_path)
+
+            payload = {
+                "ocr_data": item.ocr_data,
+                "layout_data": item.layout_data,
+                "extraction_model": item.extraction_model,
+            }
+
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=json.dumps(payload).encode("utf-8"),
+                ContentType="application/json",
             )
 
-        if operations:
-            collection.bulk_write(operations)
-        logger.success("Successfully uploaded all documents!")
+            logger.success(f"Successfully saved file to s3: {key}")
+
         return True
 
-    def _fetch_batch(
-        self,
-        path_batch: tuple[str, ...],
-        impulse_identifier: str,
-        page_offset: int,
-    ) -> tuple[list, list[dict], int]:
-        """Download and decode all images for a single batch.
-
-        This encapsulates the I/O-bound Phase 1 (S3 download + image
-        decoding) so it can be run in a background thread while vLLM
-        processes the previous batch on the GPU.
-
-        Args:
-            path_batch: Tuple of S3 paths for this batch.
-            impulse_identifier: The impulse identifier for metadata.
-            page_offset: Starting page number for this batch.
-
-        Returns:
-            (batch_input_items, item_meta, next_page_offset)
-        """
-        from chandra.model.schema import BatchInputItem
-
-        batch_input_items: list = []
-        item_meta: list[dict] = []
-        page_counter = page_offset
-
-        for path in path_batch:
-            page_counter += 1
-            filename = path.split("/")[-1]
-            logger.info(f"Downloading {filename} from S3")
-            image_bytes = get_s3_content(path)
-            file_ext = self.filetype(image_bytes) or "png"
-
-            images = self._load_images(image_bytes, file_ext)
-
-            for img in images:
-                batch_input_items.append(
-                    BatchInputItem(image=img, prompt_type="ocr_layout")
-                )
-                item_meta.append(
-                    {
-                        "filename": filename,
-                        "page_number": page_counter,
-                        "source_image": path,
-                        "impulse_identifier": impulse_identifier,
-                    }
-                )
-
-        logger.info(
-            f"Batch ready: {len(path_batch)} files → "
-            f"{len(batch_input_items)} images to vLLM"
-        )
-
-        return batch_input_items, item_meta, page_counter
 
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
@@ -1036,13 +998,23 @@ class DocumentExtractionTask(FireTaskBase):
                 key = "/".join([project_number, accession_number, "raw_images", filename])
 
                 if not s3_key_exists("nu-impulse-data", key):
-                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    item = ImpulseInputItem(
+                        impulse_identifier=impulse_identifier,
+                        page_number=i + 1,
+                        image_data=download_s3_file(image_path),
+                        source_path=image_path,
+                    )
                     impulse_input_items.append(item)
                     print(f"Uploading to key: {key}")
                     upload_pil_image_to_s3(item.image_data, "nu-impulse-data", key)
                 else:
                     print(f"Skipping existing key: {key}")
-                    item = ImpulseInputItem(impulse_identifier, i+1, download_s3_file(image_path))
+                    item = ImpulseInputItem(
+                        impulse_identifier=impulse_identifier,
+                        page_number=i + 1,
+                        image_data=download_s3_file(image_path),
+                        source_path=image_path,
+                    )
                     impulse_input_items.append(item)
 
 
@@ -1066,12 +1038,20 @@ class DocumentExtractionTask(FireTaskBase):
             batch_ocr = recognition_predictor(batch_images, batch_layout)
 
             for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
+                path_parts = item.source_path.split(".")
+                save_path = path_parts[0] + ".json"
+
+
+
                 impulse_output_items.append(
                     ImpulseOutputItem(
+                        image_data = item.image_data,
+                        source_path = item.source_path,
                         impulse_identifier=item.impulse_identifier,
                         page_number=item.page_number,
                         layout_data=layout.model_dump(),
                         ocr_data=ocr.model_dump(),
+                        data_save_path = save_path
                     )
                 )
 
@@ -1079,9 +1059,8 @@ class DocumentExtractionTask(FireTaskBase):
             contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
             print(contents)
 
-            self.save_to_mongo(
-                contents,
-                collection=_get_db()["colt"],
+            self.save_to_s3(
+                impulse_output_items,
             )
         FWAction()
 
