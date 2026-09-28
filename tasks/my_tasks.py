@@ -1163,10 +1163,10 @@ class CreateHathiTrustManifest(FireTaskBase):
         if xml_key is not None: 
             xml_str = funcs.get_s3_text(xml_key)
             yaml_content = self.xml2yaml(xml_str)
-
+            yaml_key = xml_key.replace(".xml", ".yaml") 
             s3.put_object(
                 Bucket=S3_BUCKET,
-                Key=xml_key.replace(".xml", ".yaml"),
+                Key=yaml_key,
                 Body=yaml_content.encode("utf-8"),
                 ContentType="application/x-yaml",
             )
@@ -1191,7 +1191,7 @@ class CreateHathiTrustManifest(FireTaskBase):
         key_dict = {
             "hathi_images": [key for key in keys if "hathitrust_images" in key],
             "txt": [key for key in keys if key.endswith(".txt")],
-            "yaml": [key for key in keys if key.endswith("mets.yaml")],
+            "yaml": yaml_key,
         }
 
         assert len(key_dict["hathi_images"]) == len(key_dict["txt"])
