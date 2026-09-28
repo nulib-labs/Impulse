@@ -655,7 +655,8 @@ class ImageProcessingTask(FireTaskBase):
             region_name=AWS_REGION,
         )
         s3 = session.client("s3")
-        for path in tqdm(path_array):
+        for path in tqdm(path_array):            
+            content = s3.get_object(Bucket=S3_BUCKET, Key=path)["Body"].read()
             raw_arr = self._decode(content)
             if raw_arr is None:
                 logger.error(
