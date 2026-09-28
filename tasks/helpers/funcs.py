@@ -4,7 +4,14 @@ from io import BytesIO
 from pymongo import MongoClient
 import certifi
 from tasks import config
+import os
 
+S3_BUCKET = os.environ["S3_BUCKET"]
+AWS_PROFILE = os.environ["AWS_PROFILE"]
+AWS_REGION = os.environ["AWS_REGION"]
+
+session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+s3 = session.client("s3")
 
 def parse_s3_path(s3_path: str) -> tuple[str, str]:
     """
@@ -24,7 +31,7 @@ def parse_s3_path(s3_path: str) -> tuple[str, str]:
     key = parts[1] if len(parts) > 1 else ""
     return bucket, key
 
-def get_s3_content(s3_path: str) -> bytes:
+def get_s3_content(key: str) -> bytes:
     """
     Retrieve content from S3.
 
@@ -34,14 +41,10 @@ def get_s3_content(s3_path: str) -> bytes:
     Returns:
         File content as bytes
     """
-    bucket, key = parse_s3_path(s3_path)
-
-    session = boto3.Session(profile_name="impulse")
-    s3_client = session.client("s3")
 
     # Download file content
     buffer = BytesIO()
-    s3_client.download_fileobj(bucket, key, buffer)
+    s3.download_fileobj(S3_BUCKET, key, buffer)
     buffer.seek(0)
 
     return buffer.read()
@@ -56,11 +59,8 @@ def get_s3_text(s3_path: str):
     Returns:
         A string of contents
     """
-    bucket, key = parse_s3_path(s3_path)
-    session = boto3.Session(profile_name="impulse")
-    s3_client = session.client("s3")
     buffer = BytesIO()
-    s3_client.download_fileobj(bucket, key, buffer)
+    s3.download_fileobj(S3_BUCKET, s3_path, buffer)
     buffer.seek(0)
     return buffer.read().decode("utf-8")
 
