@@ -8,11 +8,22 @@ Same S3 layout, same FireWorks workflow construction, same env vars:
     MONGO_URI                                     (default mongodb://localhost:27017)
     HATHITRUST_MANIFEST_NAME                      (default manifest.json)
 
+Duplicate protection
+--------------------
+`submit` and `start` skip any impulse_identifier (<project_id>_<barcode>) that
+already appears in ANY Firework in the database, whatever its job type or
+state, and do so before uploading anything to S3. Pass --force to override.
+Exit status: 0 = submitted, 1 = error, 3 = everything was skipped.
+
 Examples
 --------
     # Upload images and queue two jobs in one workflow
     impulse_cli.py submit -p proj1 -b 39015012345678 \\
         -j document_extraction -j image_processing --files ./scans/
+
+    # Recursive: layout is <root>/<project_id>/<barcode>/<file.ext>;
+    # one workflow is submitted per (project_id, barcode)
+    impulse_cli.py submit -r -j document_extraction --files ./data/
 
     # HathiTrust (runs after any other selected jobs)
     impulse_cli.py submit -p proj1 -b 39015012345678 \\
@@ -221,9 +232,24 @@ def s3_key_exists(key: str) -> bool:
         raise
 
 
-def expand_local_files(paths: Iterable[str]) -> list[Path]:
-    """Expand files / directories (recursively) into a naturally sorted list."""
+def _is_excluded(path: Path, patterns: Iterable[str]) -> bool:
+    """Case-insensitive glob match of the file NAME against any pattern."""
+    from fnmatch import fnmatchcase
+
+    name = path.name.lower()
+    return any(fnmatchcase(name, pat.lower()) for pat in patterns)
+
+
+def expand_local_files(
+    paths: Iterable[str], exclude: Iterable[str] = ()
+) -> list[Path]:
+    """
+    Expand files / directories (recursively) into a naturally sorted list,
+    dropping any file whose name matches an `exclude` glob (e.g. '*.db').
+    """
     from natsort import natsorted
+
+    exclude = list(exclude)
 
     found: list[Path] = []
     for raw in paths:
@@ -238,7 +264,39 @@ def expand_local_files(paths: Iterable[str]) -> list[Path]:
         else:
             raise CliError(f"Not a file or directory: {raw}")
 
+    if exclude:
+        kept = [f for f in found if not _is_excluded(f, exclude)]
+        if len(kept) != len(found):
+            _log(f"Excluded {len(found) - len(kept)} file(s) matching: "
+                 f"{', '.join(exclude)}")
+        found = kept
+
     return natsorted(found, key=lambda f: str(f))
+
+
+def group_files_by_job(files: list[Path]) -> dict[tuple[str, str], list[Path]]:
+    """
+    Group files by (project_id, barcode) using each file's location:
+
+        .../<project_id>/<barcode>/<file.ext>
+
+    Files stay in the order given (already naturally sorted), so each group
+    is numbered independently. Everything is validated before any upload.
+    """
+    groups: dict[tuple[str, str], list[Path]] = {}
+    for f in files:
+        resolved = f.resolve()
+        barcode = resolved.parent.name
+        project_id = resolved.parent.parent.name
+        try:
+            validate_ids(project_id, barcode)
+        except CliError:
+            raise CliError(
+                f"{f}: expected layout <project_id>/<barcode>/<file>, but got "
+                f"project_id={project_id!r}, barcode={barcode!r}"
+            ) from None
+        groups.setdefault((project_id, barcode), []).append(f)
+    return groups
 
 
 def upload_files_to_s3(project_id: str, barcode: str, files: list[Path]) -> list[str]:
@@ -399,6 +457,16 @@ def submit_fireworks_jobs(
     return {jt: id_map[fw.fw_id] for jt, fw in fireworks.items()}
 
 
+def impulse_identifier_exists(impulse_identifier: str) -> bool:
+    """True if ANY Firework in the collection already carries this identifier."""
+    return (
+        get_lpad().fireworks.count_documents(
+            {"spec.impulse_identifier": impulse_identifier}, limit=1
+        )
+        > 0
+    )
+
+
 def find_fireworks_for_job(impulse_identifier: str) -> list[dict[str, Any]]:
     docs = get_lpad().fireworks.find(
         {"spec.impulse_identifier": impulse_identifier}
@@ -444,45 +512,148 @@ def _format_fireworks(fws: list[dict[str, Any]]) -> str:
 # Commands
 # ---------------------------------------------------------------------------
 
-def _wait_for_completion(impulse_identifier: str, timeout: float, interval: float) -> int:
-    """Poll until all FireWorks are terminal. Returns a process exit code."""
+def _wait_for_completion(identifiers: list[str], timeout: float, interval: float) -> int:
+    """Poll until every job's FireWorks are terminal. Returns an exit code."""
     deadline = time.monotonic() + timeout if timeout > 0 else None
-    while True:
-        fws = find_fireworks_for_job(impulse_identifier)
-        states = {f["state"] for f in fws}
+    pending = list(identifiers)
+    exit_code = 0
 
-        if fws and states <= TERMINAL_STATES:
-            _log(_format_fireworks(fws))
-            return 1 if states & FAILED_STATES else 0
+    while pending:
+        for ident in list(pending):
+            fws = find_fireworks_for_job(ident)
+            states = {f["state"] for f in fws}
+            if fws and states <= TERMINAL_STATES:
+                _log(f"{ident}\n{_format_fireworks(fws)}")
+                if states & FAILED_STATES:
+                    exit_code = 1
+                pending.remove(ident)
 
+        if not pending:
+            break
         if deadline and time.monotonic() > deadline:
-            _log(_format_fireworks(fws))
-            _log("Timed out waiting for jobs to finish.")
+            _log("Timed out waiting for: " + ", ".join(pending))
             return 2
-
         time.sleep(interval)
+
+    return exit_code
+
+
+def _submit_one(
+    project_id: str, barcode: str, job_types: list[str]
+) -> dict[str, Any]:
+    impulse_identifier = make_impulse_identifier(project_id, barcode)
+    specs = build_specs(project_id, barcode, job_types)
+    fw_ids = submit_fireworks_jobs(impulse_identifier, specs)
+    return {
+        "impulse_identifier": impulse_identifier,
+        "project_id": project_id,
+        "barcode": barcode,
+        "fw_ids": fw_ids,
+    }
+
+
+SKIP_REASON = "impulse_identifier already exists in the FireWorks database"
+
+EXIT_SKIPPED = 3  # nothing submitted because everything already existed
+
+
+def _report_and_wait(
+    args: argparse.Namespace,
+    results: list[dict[str, Any]],
+    skipped: list[dict[str, str]],
+    errors: list[dict[str, str]],
+) -> int:
+    if args.json:
+        print(json.dumps(
+            {"submitted": results, "skipped": skipped, "errors": errors},
+            indent=2, default=str,
+        ))
+    else:
+        for r in results:
+            for jt, fw_id in r["fw_ids"].items():
+                print(f"[{r['impulse_identifier']}] Submitted "
+                      f"{JOB_DEFINITIONS[jt].label}: fw_id={fw_id}")
+
+    for s in skipped:
+        _log(f"skipped: [{s['impulse_identifier']}] {s['reason']} "
+             f"(use --force to submit anyway)")
+    for e in errors:
+        _log(f"error: [{e['impulse_identifier']}] {e['error']}")
+
+    if errors:
+        code = 1
+    elif skipped and not results:
+        code = EXIT_SKIPPED
+    else:
+        code = 0
+
+    if getattr(args, "wait", False) and results:
+        wait_code = _wait_for_completion(
+            [r["impulse_identifier"] for r in results], args.timeout, args.interval
+        )
+        code = max(code, wait_code) if code != EXIT_SKIPPED else wait_code
+    return code
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
-    validate_ids(args.project_id, args.barcode)
-    definitions = [get_job_definition(jt) for jt in args.job]
-    impulse_identifier = make_impulse_identifier(args.project_id, args.barcode)
+    for jt in args.job:
+        get_job_definition(jt)
 
-    needs_xml = any(d.requires_xml for d in definitions)
+    if args.recursive:
+        if args.project_id or args.barcode:
+            raise CliError(
+                "--project-id/--barcode cannot be combined with --recursive; "
+                "they are taken from the <project_id>/<barcode>/ directories."
+            )
+        if args.xml:
+            raise CliError(
+                "--xml cannot be combined with --recursive (one XML can't "
+                "apply to many barcodes). For hathitrust, the XML must "
+                "already be in S3 for each barcode."
+            )
+        if not args.files:
+            raise CliError("--recursive requires --files (root directories to scan).")
 
-    if args.files:
-        files = expand_local_files(args.files)
+        files = expand_local_files(args.files, args.exclude)
         if not files:
             raise CliError("No files found to upload.")
-        _log(f"Uploading {len(files)} file(s)...")
-        upload_files_to_s3(args.project_id, args.barcode, files)
+        groups = group_files_by_job(files)
+    else:
+        validate_ids(args.project_id, args.barcode)
+        files = expand_local_files(args.files, args.exclude) if args.files else []
+        if args.files and not files:
+            raise CliError("No files found to upload.")
+        groups = {(args.project_id, args.barcode): files}
 
-    if args.xml:
-        upload_xml_to_s3(args.project_id, args.barcode, Path(args.xml).expanduser())
-    elif needs_xml and not args.skip_upload_check:
-        pass  # build_spec() will verify the XML already exists in S3
+    if args.recursive:
+        _log(f"Found {len(files)} file(s) in {len(groups)} job(s):")
+        for (pid, bc), gfiles in groups.items():
+            _log(f"  {pid}/{bc}: {len(gfiles)} file(s)")
 
-    return _submit(args, impulse_identifier)
+    results: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+
+    for (project_id, barcode), gfiles in groups.items():
+        ident = make_impulse_identifier(project_id, barcode)
+        try:
+            # Check BEFORE uploading so an existing job's inputs in S3 are
+            # never overwritten.
+            if not args.force and impulse_identifier_exists(ident):
+                skipped.append({"impulse_identifier": ident, "reason": SKIP_REASON})
+                continue
+            if gfiles:
+                _log(f"[{ident}] uploading {len(gfiles)} file(s)...")
+                upload_files_to_s3(project_id, barcode, gfiles)
+            if args.xml:
+                upload_xml_to_s3(project_id, barcode, Path(args.xml).expanduser())
+            results.append(_submit_one(project_id, barcode, args.job))
+        except CliError as exc:
+            if not args.recursive:
+                raise
+            errors.append({"impulse_identifier": ident, "error": str(exc)})
+
+    return _report_and_wait(args, results, skipped, errors)
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -490,25 +661,15 @@ def cmd_start(args: argparse.Namespace) -> int:
     validate_ids(args.project_id, args.barcode)
     for jt in args.job:
         get_job_definition(jt)
-    return _submit(args, make_impulse_identifier(args.project_id, args.barcode))
 
+    ident = make_impulse_identifier(args.project_id, args.barcode)
+    if not args.force and impulse_identifier_exists(ident):
+        return _report_and_wait(
+            args, [], [{"impulse_identifier": ident, "reason": SKIP_REASON}], []
+        )
 
-def _submit(args: argparse.Namespace, impulse_identifier: str) -> int:
-    specs = build_specs(args.project_id, args.barcode, args.job)
-    fw_ids = submit_fireworks_jobs(impulse_identifier, specs)
-
-    _emit(
-        {"impulse_identifier": impulse_identifier, "fw_ids": fw_ids},
-        args.json,
-        human="\n".join(
-            f"Submitted {JOB_DEFINITIONS[jt].label}: fw_id={fw_id}"
-            for jt, fw_id in fw_ids.items()
-        ),
-    )
-
-    if getattr(args, "wait", False):
-        return _wait_for_completion(impulse_identifier, args.timeout, args.interval)
-    return 0
+    result = _submit_one(args.project_id, args.barcode, args.job)
+    return _report_and_wait(args, [result], [], [])
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -542,7 +703,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_wait(args: argparse.Namespace) -> int:
     validate_ids(args.project_id, args.barcode)
     return _wait_for_completion(
-        make_impulse_identifier(args.project_id, args.barcode),
+        [make_impulse_identifier(args.project_id, args.barcode)],
         args.timeout,
         args.interval,
     )
@@ -640,13 +801,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("submit", help="Upload inputs and submit jobs")
-    _add_job_id_args(p)
+    p.add_argument("-p", "--project-id",
+                   help="Project ID (required unless --recursive)")
+    p.add_argument("-b", "--barcode",
+                   help="Barcode (required unless --recursive)")
     _add_job_type_arg(p)
     p.add_argument("--files", nargs="+", metavar="PATH",
                    help="Images/PDFs or directories to upload")
+    p.add_argument("-r", "--recursive", action="store_true",
+                   help="Scan --files recursively; each file's parent directory "
+                        "is taken as <project_id>/<barcode>/, and one job is "
+                        "submitted per barcode")
+    p.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
+                   help="Skip files whose name matches this glob "
+                        "(case-insensitive, e.g. '*.db'); repeatable")
     p.add_argument("--xml", metavar="PATH", help="HathiTrust XML document to upload")
-    p.add_argument("--skip-upload-check", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true")
+    p.add_argument("--force", action="store_true",
+                   help="Submit even if the impulse_identifier already exists "
+                        "in the FireWorks database")
     _add_wait_args(p)
     p.set_defaults(func=cmd_submit)
 
@@ -654,6 +827,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_job_id_args(p)
     _add_job_type_arg(p)
     p.add_argument("--json", action="store_true")
+    p.add_argument("--force", action="store_true",
+                   help="Submit even if the impulse_identifier already exists "
+                        "in the FireWorks database")
     _add_wait_args(p)
     p.set_defaults(func=cmd_start)
 
