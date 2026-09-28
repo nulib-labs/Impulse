@@ -701,7 +701,7 @@ class ImageProcessingTask(FireTaskBase):
             del binary
             s3.put_object(
                 Bucket=S3_BUCKET,
-                Key=f"{path.rsplit('.', 1)[0]}.jp2",  # adjust to your naming scheme
+                Key=f"{path.rsplit('.', 1)[0]}.jp2".replace("uploaded_images", "hathitrust_images"),  # adjust to your naming scheme
                 Body=encoded_bytes,
                 ContentType="image/jp2",
             )
@@ -936,7 +936,7 @@ class DocumentExtractionTask(FireTaskBase):
                     logger.debug(key)
                     s3.put_object(
                     Bucket=S3_BUCKET,
-                    Key=key,
+                    Key=key.replace("uploaded_images", "txt"),
                     Body=payload.encode("utf-8"),
                     ContentType="application/json",
                 )
@@ -972,6 +972,7 @@ class DocumentExtractionTask(FireTaskBase):
             for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
                 path_parts = item.source_path.split(".")
                 save_path = path_parts[0] + ".json"
+                save_path = save_path.replace("uploaded_images", "json")
 
 
 
