@@ -1,0 +1,10 @@
+<!doctype html>
+<title>Job {{ impulse_identifier }}</title>
+<h1>Job {{ impulse_identifier }}</h1>
+
+{% if message %}<p><strong>{{ message }}</strong></p>{% endif %}
+
+<h2>Uploaded files ({{ files|length }})</h2>
+<ul>
+  {% for f in files %}<li>{{ f }}</li>{% endfor %}
+</ul>

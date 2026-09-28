@@ -1,0 +1,212 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Impulse</title>
+
+  <style>
+    body {
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 0 20px;
+      font-family: system-ui, sans-serif;
+    }
+
+    .job {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 10px 0;
+    }
+
+    .job label {
+      display: block;
+      cursor: pointer;
+    }
+
+    .description {
+      margin: 5px 0 0 24px;
+      color: #666;
+      font-size: 0.9em;
+    }
+
+    .error {
+      color: #b00020;
+      background: #ffeef0;
+      padding: 10px;
+      border-radius: 5px;
+    }
+
+    .field {
+      margin: 20px 0;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      max-width: 500px;
+      padding: 8px;
+      box-sizing: border-box;
+      margin-bottom: 8px;
+    }
+
+    input[type="file"] {
+      margin-top: 5px;
+    }
+
+    button {
+      padding: 10px 18px;
+      font-size: 1em;
+      cursor: pointer;
+    }
+  </style>
+
+</head>
+
+<body>
+
+  <h1>Impulse</h1>
+
+  <h2>Start a Job</h2>
+
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+
+    <div class="field">
+      <h3>1. Choose one or more jobs</h3>
+      <p class="description">
+        Jobs that use uploaded images (e.g. Document Extraction and Image
+        Processing) will run in parallel on the same files.
+      </p>
+
+      {% for key, job in jobs.items() %}
+      <div class="job">
+        <label>
+          <input type="checkbox" name="job_type" value="{{ key }}" {% if loop.first %}checked{% endif %}
+            data-requires-files="{{ 'true' if job.requires_files else 'false' }}"
+            data-requires-xml="{{ 'true' if job.requires_xml else 'false' }}"
+            data-requires-identifier="{{ 'true' if job.requires_impulse_identifier else 'false' }}">
+
+          <strong>{{ job.label }}</strong>
+        </label>
+
+        <div class="description">
+          {{ job.description }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="field" id="identifier-field">
+      <h3>2. Impulse identifier</h3>
+
+      <input type="text" name="project_id" id="project_id" placeholder="e.g. p1234">
+      <input type="text" name="barcode" id="barcode" placeholder="e.g. 355512345678">
+
+      <p class="description">
+        Required for jobs that operate on an Impulse document.
+      </p>
+    </div>
+
+    <div class="field" id="files-field">
+      <h3>3. Upload files</h3>
+      <p>
+        <label>
+          Files:
+          <input type="file" name="file" id="file-input" multiple>
+        </label>
+      </p>
+
+      <p>
+        <label>
+          Or a folder:
+          <input type="file" name="file" id="folder-input" webkitdirectory directory multiple>
+        </label>
+      </p>
+
+      <p class="description">
+        You can select multiple files or an entire folder. Files are sorted
+        naturally and stored under the job's S3 directory as a numbered
+        sequence.
+      </p>
+    </div>
+
+    <div class="field" id="xml-field">
+      <h3>4. Upload XML (HathiTrust)</h3>
+      <p>
+        <label>
+          XML document:
+          <input type="file" name="xml_file" id="xml-input" accept=".xml,application/xml,text/xml">
+        </label>
+      </p>
+    </div>
+
+    <div class="field">
+      <button type="submit">
+        Submit Job(s)
+      </button>
+    </div>
+
+  </form>
+
+  <script>
+    const jobInputs = document.querySelectorAll('input[name="job_type"]');
+
+    const filesField = document.getElementById("files-field");
+    const xmlField = document.getElementById("xml-field");
+    const identifierField = document.getElementById("identifier-field");
+
+    const fileInput = document.getElementById("file-input");
+    const folderInput = document.getElementById("folder-input");
+    const xmlInput = document.getElementById("xml-input");
+    const projectInput = document.getElementById("project_id");
+    const barcodeInput = document.getElementById("barcode");
+
+    function updateForm() {
+      const selected = Array.from(
+        document.querySelectorAll('input[name="job_type"]:checked')
+      );
+
+      const anyNeeds = (attr) => selected.some((el) => el.dataset[attr] === "true");
+
+      const requiresFiles = anyNeeds("requiresFiles");
+      const requiresXml = anyNeeds("requiresXml");
+      const requiresIdentifier = anyNeeds("requiresIdentifier");
+
+      // Images / PDFs
+      filesField.style.display = requiresFiles ? "block" : "none";
+      if (!requiresFiles) {
+        fileInput.value = "";
+        folderInput.value = "";
+      }
+
+      // XML
+      xmlField.style.display = requiresXml ? "block" : "none";
+      xmlInput.required = requiresXml;
+      if (!requiresXml) {
+        xmlInput.value = "";
+      }
+
+      // Identifier (project ID + barcode)
+      identifierField.style.display = requiresIdentifier ? "block" : "none";
+      projectInput.required = requiresIdentifier;
+      barcodeInput.required = requiresIdentifier;
+      if (!requiresIdentifier) {
+        projectInput.value = "";
+        barcodeInput.value = "";
+      }
+    }
+
+    jobInputs.forEach((input) => input.addEventListener("change", updateForm));
+
+    updateForm();
+  </script>
+
+</body>
+
+</html>
