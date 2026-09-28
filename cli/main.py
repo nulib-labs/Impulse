@@ -53,7 +53,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
+from dotenv import load_dotenv
 
+load_dotenv()
 # Heavy / environment-dependent imports are deferred where practical so that
 # `--help` works without AWS or Mongo configured.
 
