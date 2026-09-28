@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Queue document_extraction + image_processing jobs via cli/main.py.
+    Queue document_extraction + image_processing jobs via impulse_cli.py.
 
 .DESCRIPTION
     Each directory argument must be named <project_id>_<barcode> and contain
@@ -12,9 +12,13 @@
 
     The project ID and barcode are parsed from the directory name (split at
     the LAST underscore, so project IDs may contain underscores but barcodes
-    may not). cli/main.py then uploads the files and inserts one workflow
+    may not). impulse_cli.py then uploads the files and inserts one workflow
     per directory into the FireWorks database. Nothing is run here -- workers
     pick the jobs up later.
+
+    Files whose names match *.db (e.g. Thumbs.db) are left out: they are not
+    uploaded, and a directory containing only such files counts as empty. Edit
+    the $Exclude list near the top to change the patterns.
 
     Directories whose <project_id>_<barcode> identifier already exists in the
     FireWorks database are skipped (nothing is uploaded for them) unless
@@ -63,6 +67,7 @@ $ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
 
 $Jobs = @('document_extraction', 'image_processing')
+$Exclude = @('*.db')   # file-name globs to leave out (e.g. Thumbs.db)
 $ExitSkipped = 3   # impulse_cli.py: everything already existed in FireWorks
 
 function Write-Err([string] $Message) {
@@ -71,7 +76,7 @@ function Write-Err([string] $Message) {
 
 # --- locate the CLI and a Python interpreter --------------------------------
 
-$cli = if ($env:IMPULSE_CLI) { $env:IMPULSE_CLI } else { Join-Path $PSScriptRoot 'cli/main.py' }
+$cli = if ($env:IMPULSE_CLI) { $env:IMPULSE_CLI } else { Join-Path $PSScriptRoot 'impulse_cli.py' }
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
     Write-Err "error: impulse_cli.py not found at $cli (set IMPULSE_CLI)"
     exit 1
@@ -103,6 +108,8 @@ if (-not $DryRun) {
 $jobArgs = @()
 foreach ($job in $Jobs) { $jobArgs += @('-j', $job) }
 $forceArgs = if ($Force) { @('--force') } else { @() }
+$excludeArgs = @()
+foreach ($pattern in $Exclude) { $excludeArgs += @('--exclude', $pattern) }
 
 # --- expand directory arguments (wildcards allowed) -------------------------
 
@@ -159,7 +166,10 @@ foreach ($t in $targets) {
     }
 
     $hasFiles = Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.Name.StartsWith('.') } |
+        Where-Object {
+            $n = $_.Name
+            -not $n.StartsWith('.') -and -not ($Exclude | Where-Object { $n -like $_ })
+        } |
         Select-Object -First 1
     if (-not $hasFiles) {
         Write-Err "error: ${dir}: no files found"
@@ -174,8 +184,8 @@ foreach ($t in $targets) {
         continue
     }
 
-    $cliArgs = @('submit', '-p', $projectId, '-b', $barcode) + $jobArgs + $forceArgs + @('--files', $dir)
-    & $python $cli @cliArgs
+    $cliArgs = @('submit', '-p', $projectId, '-b', $barcode) + $jobArgs + $forceArgs + $excludeArgs + @('--files', $dir)
+    & uv run $cli @cliArgs
     $rc = $LASTEXITCODE
 
     switch ($rc) {
