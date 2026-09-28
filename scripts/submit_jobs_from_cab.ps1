@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Queue document_extraction + image_processing jobs via impulse_cli.py.
+    Queue document_extraction + image_processing jobs via cli/main.py.
 
 .DESCRIPTION
     Each directory argument must be named <project_id>_<barcode> and contain
@@ -12,7 +12,7 @@
 
     The project ID and barcode are parsed from the directory name (split at
     the LAST underscore, so project IDs may contain underscores but barcodes
-    may not). impulse_cli.py then uploads the files and inserts one workflow
+    may not). cli/main.py then uploads the files and inserts one workflow
     per directory into the FireWorks database. Nothing is run here -- workers
     pick the jobs up later.
 
@@ -71,7 +71,7 @@ function Write-Err([string] $Message) {
 
 # --- locate the CLI and a Python interpreter --------------------------------
 
-$cli = if ($env:IMPULSE_CLI) { $env:IMPULSE_CLI } else { Join-Path $PSScriptRoot 'impulse_cli.py' }
+$cli = if ($env:IMPULSE_CLI) { $env:IMPULSE_CLI } else { Join-Path $PSScriptRoot 'cli/main.py' }
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
     Write-Err "error: impulse_cli.py not found at $cli (set IMPULSE_CLI)"
     exit 1
