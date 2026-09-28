@@ -1200,6 +1200,9 @@ class CreateHathiTrustManifest(FireTaskBase):
             return s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            logger.debug(f"HathiTrust images (Should be JP2): {key_dict["hathi_images"]}")
+            logger.debug(f"Txt files: {key_dict["txt"]}")
+            logger.debug(f"yaml file: {key_dict["yaml"]}")
             for image_key in key_dict["hathi_images"]:
                 zip_file.writestr("JP2/" + image_key.split("/")[-1], read_key(image_key))
             for txt_key in key_dict["txt"]:
