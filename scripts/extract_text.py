@@ -38,12 +38,13 @@ def handle_txt_format(key):
         out_key =key.replace("json", "txt")
         s3.put_object(
         Bucket=S3_BUCKET,
-        Key=key,
+        Key=out_key,
         Body=payload.encode("utf-8"),
         ContentType="application/json",
     )
     except Exception as e:
-        raise e
+        with open("failed_keys.txt", "a") as f:
+            f.write(key + "\n")
 
 def generate_json_files():
     paginator = s3.get_paginator('list_objects_v2') #
