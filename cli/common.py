@@ -13,7 +13,7 @@ import sys
 from typing import Iterable, Iterator
 
 # --------------------------------------------------------------------------
-# Constants — the conventions the pipeline already follows
+# Constants - the conventions the pipeline already follows
 # --------------------------------------------------------------------------
 
 DATA_BUCKET = "nu-impulse-data"
@@ -207,7 +207,7 @@ def resolve_identifiers(args, s3=None, db=None, all_from_db: bool = False) -> li
                 print(f"[warn] no identifier found for barcode {bare!r}", file=sys.stderr)
             else:
                 print(
-                    f"[warn] barcode {bare!r} is ambiguous: {hits} — skipping",
+                    f"[warn] barcode {bare!r} is ambiguous: {hits} - skipping",
                     file=sys.stderr,
                 )
 
