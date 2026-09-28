@@ -564,23 +564,6 @@ class ImageProcessingTask(FireTaskBase):
         """
         return bool(re.match(r"^s3a?://", path))
 
-    @staticmethod
-    def parse_s3_path(s3_path: str) -> tuple[str, str]:
-        """
-        Parse S3 path into bucket and key.
-
-        Args:
-            s3_path: S3 URI in format s3://bucket/key or s3a://bucket/key
-
-        Returns:
-            Tuple of (bucket, key)
-        """
-        path = re.sub(r"^s3a?://", "", s3_path)
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
     def save_to_s3(self, s3_path: str, content: bytes) -> bool:
         """
         Save binary content to S3.
@@ -654,7 +637,7 @@ class ImageProcessingTask(FireTaskBase):
             cv2.setNumThreads(2)
         except Exception:
             pass
-
+        impulse_identifier = fw_spec.get("impulse_identifier")
         path_array_key = fw_spec.get("find_path_array_in", None)
         if not path_array_key:
             logger.critical("Critical spec keys missing. Abandoning.")
@@ -667,146 +650,62 @@ class ImageProcessingTask(FireTaskBase):
 
         path_array = natsorted(path_array)
 
-        impulse_identifier = fw_spec.get("impulse_identifier", None)
-        impulse_identifier = str(uuid4()) if not impulse_identifier else impulse_identifier
-        impulse_identifier = (
-            impulse_identifier.replace("{", "")
-            .replace("}", "")
-            .replace("'", "")
-            .lower()
+        session = boto3.Session(
+            profile_name=AWS_PROFILE,
+            region_name=AWS_REGION,
         )
-
-        project_number = impulse_identifier.split("_")[0].lower()
-        accession_number = impulse_identifier.split("_")[1].lower()
-
-        new_keys: list[str] = []
-        keys_lock = threading.Lock()
-
-        def sibling_key(path: str, new_extension: str) -> str:
-            """
-            Return the S3 key for a sibling file with a different extension.
-
-            Example:
-                s3://bucket/foo/bar/page.png
-                -> foo/bar/page.jp2
-            """
-            bucket, key = self.parse_s3_path(path)
-            if not key:
-                raise ValueError(f"Invalid S3 path: {path}")
-
-            base, _ = os.path.splitext(key)
-            return f"{base}{new_extension}"
-
-        def process_one(i: int, path: str) -> None:
-            if not self.is_s3_path(path):
-                logger.warning(f"Skipping non-S3 path: {path}")
+        s3 = session.client("s3")
+        for path in tqdm(path_array):
+            raw_arr = self._decode(content)
+            if raw_arr is None:
+                logger.error(
+                    f"Failed to decode image at {path}, skipping."
+                )
                 return
 
-            try:
-                bucket, source_key = self.parse_s3_path(path)
-
-                # The transformed image is a sibling of the source image.
-                output_key = sibling_key(path, ".jp2")
-
-                if s3_key_exists(bucket, output_key):
-                    logger.info(
-                        f"Skipping existing transformed image: "
-                        f"s3://{bucket}/{output_key}"
+            # Pipeline:
+            #   grayscale
+            #       -> denoise
+            #       -> illumination normalization
+            #       -> Sauvola binarization
+            #       -> deskew
+            if raw_arr.ndim == 3:
+                if raw_arr.shape[2] == 4:
+                    gray = cv2.cvtColor(
+                        raw_arr,
+                        cv2.COLOR_BGRA2GRAY,
                     )
-                    with keys_lock:
-                        new_keys.append(output_key)
-                    return
-
-                content = get_s3_content(path)
-
-                raw_arr = self._decode(content)
-                if raw_arr is None:
-                    logger.error(
-                        f"Failed to decode image at {path}, skipping."
-                    )
-                    return
-
-                # Pipeline:
-                #   grayscale
-                #       -> denoise
-                #       -> illumination normalization
-                #       -> Sauvola binarization
-                #       -> deskew
-                if raw_arr.ndim == 3:
-                    if raw_arr.shape[2] == 4:
-                        gray = cv2.cvtColor(
-                            raw_arr,
-                            cv2.COLOR_BGRA2GRAY,
-                        )
-                    elif raw_arr.shape[2] == 3:
-                        gray = self._to_grayscale(raw_arr)
-                    else:
-                        gray = raw_arr[..., 0]
+                elif raw_arr.shape[2] == 3:
+                    gray = self._to_grayscale(raw_arr)
                 else:
-                    gray = raw_arr
+                    gray = raw_arr[..., 0]
+            else:
+                gray = raw_arr
 
-                del raw_arr
+            del raw_arr
 
-                gray = self._denoise_gray(gray)
-                gray = self._normalize_illumination(gray)
+            gray = self._denoise_gray(gray)
+            gray = self._normalize_illumination(gray)
 
-                binary: MatLike = self._binarize_adaptive(gray)
-                del gray
+            binary: MatLike = self._binarize_adaptive(gray)
+            del gray
 
-                binary = self._deskew(binary)
+            binary = self._deskew(binary)
 
-                # Encode the processed image as JPEG 2000.
-                encoded_bytes, _ = self._encode_to_image(
-                    binary,
-                    ".jp2",
-                )
-                del binary
+            # Encode the processed image as JPEG 2000.
+            encoded_bytes, _ = self._encode_to_image(
+                binary,
+                ".jp2",
+            )
+            del binary
+            s3.put_object(
+                Bucket=S3_BUCKET,
+                Key=f"{path.rsplit('.', 1)[0]}.jp2",  # adjust to your naming scheme
+                Body=encoded_bytes,
+                ContentType="image/jp2",
+            )
 
-                self.save_to_s3(
-                    f"s3://{bucket}/{output_key}",
-                    encoded_bytes,
-                )
-
-                logger.success(
-                    f"Uploaded transformed image: "
-                    f"s3://{bucket}/{output_key}"
-                )
-
-                with keys_lock:
-                    new_keys.append(output_key)
-
-            except Exception as exc:
-                # Never let one bad page kill the whole run.
-                logger.exception(
-                    f"Failed to process {path}: {exc}"
-                )
-                return
-
-            with keys_lock:
-                new_keys.append(key)
-
-        # Bounded worker pool. The pipeline is CPU + RAM heavy (Sauvola
-        # allocates several float64 arrays the size of the image, and
-        # deskew runs a Hough transform), so we deliberately keep the
-        # concurrency low. Env var lets ops tune per-host.
-        max_workers = int(os.environ.get("IMPULSE_IMG_WORKERS", "4"))
-        max_workers = max(1, max_workers)
-        logger.info(
-            f"Processing {len(path_array)} images with {max_workers} workers"
-        )
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [
-                pool.submit(process_one, i, path)
-                for i, path in enumerate(path_array)
-            ]
-            for fut in as_completed(futures):
-                # Surface any unexpected exception that escaped process_one.
-                fut.result()
-
-        new_keys = natsorted(new_keys)
-
-        return FWAction(update_spec={"keys": new_keys})
+        return FWAction()
 
 
 class DocumentExtractionTask(FireTaskBase):
