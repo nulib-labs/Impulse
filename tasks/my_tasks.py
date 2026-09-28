@@ -1161,6 +1161,7 @@ class CreateHathiTrustManifest(FireTaskBase):
         if xml_key is not None: 
             funcs.get_s3_text(xml_key)
         else:
+            logger.error("Failed to get xml key!")
             raise ValueError("Failed to get xml key!")
         if id is None:
             raise ValueError("ID not in spec!")
@@ -1168,7 +1169,7 @@ class CreateHathiTrustManifest(FireTaskBase):
         s3 = session.client("s3")
 
         proj_id, barcode = id.split("_")
-        prefix = f"{proj_id}/{barcode}/"
+        prefix = f"jobs/{proj_id}/{barcode}/"
         manifest_key = f"{prefix}manifest.zip"
 
         paginator = s3.get_paginator("list_objects_v2")
