@@ -849,7 +849,7 @@ class DocumentExtractionTask(FireTaskBase):
         for item in items:
             s3_path = item.source_path
             logger.debug(f"s3_path: {s3_path}")
-            bucket, key = self.parse_s3_path(s3_path)
+            save_path = item.data_save_path
 
             payload = {
                 "ocr_data": item.ocr_data,
@@ -859,11 +859,11 @@ class DocumentExtractionTask(FireTaskBase):
 
             s3.put_object(
                 Bucket=S3_BUCKET,
-                Key="jobs" + "/" + key.split(".")[0] + ".json",
+                Key=save_path,
                 Body=json.dumps(payload).encode("utf-8"),
                 ContentType="application/json",
             )
-            logger.success(f"Successfully saved file to s3: {key}")
+            logger.success(f"Successfully saved file to s3: {save_path}")
 
         return True
 
@@ -938,7 +938,7 @@ class DocumentExtractionTask(FireTaskBase):
                     Bucket=S3_BUCKET,
                     Key=key.replace("uploaded_images", "txt"),
                     Body=payload.encode("utf-8"),
-                    ContentType="application/json",
+                    ContentType="application/plain",
                 )
                 except Exception as e:
                     raise e
