@@ -64,6 +64,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+print(MONGO_URI)
 MONGO_DB = "fireworks"
 HATHITRUST_MANIFEST_NAME = os.environ.get("HATHITRUST_MANIFEST_NAME", "manifest.json")
 
