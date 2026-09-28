@@ -53,9 +53,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
-from dotenv import load_dotenv
 
-load_dotenv()
 # Heavy / environment-dependent imports are deferred where practical so that
 # `--help` works without AWS or Mongo configured.
 
@@ -64,7 +62,6 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
-print(MONGO_URI)
 MONGO_DB = "fireworks"
 HATHITRUST_MANIFEST_NAME = os.environ.get("HATHITRUST_MANIFEST_NAME", "manifest.json")
 
@@ -455,9 +452,12 @@ def submit_fireworks_jobs(
         name=f"impulse-{impulse_identifier}",
     )
 
-    # add_wf returns {temporary fw_id: database fw_id}, NOT {job_type: fw_id}.
+    # add_wf returns {temporary fw_id: database fw_id}, NOT {job_type: fw_id},
+    # and it reassigns fw.fw_id IN PLACE -- so remember the temporary ids
+    # before inserting, then translate them afterwards.
+    temp_ids = {jt: fw.fw_id for jt, fw in fireworks.items()}
     id_map = get_lpad().add_wf(workflow)
-    return {jt: id_map[fw.fw_id] for jt, fw in fireworks.items()}
+    return {jt: id_map[temp_id] for jt, temp_id in temp_ids.items()}
 
 
 def impulse_identifier_exists(impulse_identifier: str) -> bool:
