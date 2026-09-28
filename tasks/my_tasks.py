@@ -1208,7 +1208,7 @@ class CreateHathiTrustManifest(FireTaskBase):
             for txt_key in key_dict["txt"]:
                 zip_file.writestr("TXT/" + txt_key.split("/")[-1], read_key(txt_key))
             for mets_yaml_key in key_dict["yaml"]:
-                zip_file.writestr(mets_yaml_key.split("/")[-1], read_key(mets_yaml_key))
+                zip_file.writestr(yaml_key.split("/")[-1], read_key(xml_key))
 
         zip_buffer.seek(0)
         s3.upload_fileobj(zip_buffer, S3_BUCKET, manifest_key)
