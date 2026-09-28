@@ -1158,17 +1158,17 @@ class CreateHathiTrustManifest(FireTaskBase):
         import zipfile
         xml_key = fw_spec.get("xml_key")
         id = fw_spec.get("impulse_identifier")
+        session = boto3.Session(profile_name=AWS_PROFILE)
+        s3 = session.client("s3")
         if xml_key is not None: 
             xml_str = funcs.get_s3_text(xml_key)
             yaml_content = self.xml2yaml(xml_str)
-            s3.upload_fileobj(yaml_content, S3_BUCKET, manifest_key.replace("xml", "yaml"))
+            s3.upload_fileobj(yaml_content, S3_BUCKET, xml_key.replace("xml", "yaml"))
         else:
             logger.error("Failed to get xml key!")
             raise ValueError("Failed to get xml key!")
         if id is None:
             raise ValueError("ID not in spec!")
-        session = boto3.Session(profile_name=AWS_PROFILE)
-        s3 = session.client("s3")
 
         proj_id, barcode = id.split("_")
         prefix = f"jobs/{proj_id}/{barcode}/"
