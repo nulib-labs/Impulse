@@ -1163,7 +1163,13 @@ class CreateHathiTrustManifest(FireTaskBase):
         if xml_key is not None: 
             xml_str = funcs.get_s3_text(xml_key)
             yaml_content = self.xml2yaml(xml_str)
-            s3.upload_fileobj(yaml_content, S3_BUCKET, xml_key.replace("xml", "yaml"))
+
+            s3.put_object(
+                Bucket=S3_BUCKET,
+                Key=xml_key.replace(".xml", ".yaml"),
+                Body=yaml_content.encode("utf-8"),
+                ContentType="application/x-yaml",
+            )
         else:
             logger.error("Failed to get xml key!")
             raise ValueError("Failed to get xml key!")
