@@ -1159,7 +1159,9 @@ class CreateHathiTrustManifest(FireTaskBase):
         xml_key = fw_spec.get("xml_key")
         id = fw_spec.get("impulse_identifier")
         if xml_key is not None: 
-            funcs.get_s3_text(xml_key)
+            xml_str = funcs.get_s3_text(xml_key)
+            yaml_content = self.xml2yaml(xml_str)
+            s3.upload_fileobj(yaml_content, S3_BUCKET, manifest_key.replace("xml", "yaml"))
         else:
             logger.error("Failed to get xml key!")
             raise ValueError("Failed to get xml key!")
@@ -1181,10 +1183,12 @@ class CreateHathiTrustManifest(FireTaskBase):
         keys = [key for key in keys if key != manifest_key]
 
         key_dict = {
-            "hathi_images": [key for key in keys if "hathi_images" in key],
+            "hathi_images": [key for key in keys if "hathitrust_images" in key],
             "txt": [key for key in keys if key.endswith(".txt")],
             "yaml": [key for key in keys if key.endswith("mets.yaml")],
         }
+
+        assert len(key_dict["hathi_images"]) == len(key_dict["txt"])
 
         def read_key(key: str) -> bytes:
             return s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
