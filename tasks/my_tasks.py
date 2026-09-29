@@ -945,7 +945,7 @@ class DocumentExtractionTask(FireTaskBase):
 
             batch_images = [item.image_data for item in batch]  # extract once
             batch_layout = layout_predictor(batch_images)
-            batch_ocr = recognition_predictor(batch_images, batch_layout)
+            batch_ocr = recognition_predictor(batch_images)
 
             for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
                 path_parts = item.source_path.split(".")
