@@ -41,3 +41,5 @@ fail
 .env
 
 uv.lock
+
+notes.md
