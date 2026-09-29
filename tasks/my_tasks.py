@@ -944,6 +944,7 @@ class DocumentExtractionTask(FireTaskBase):
             impulse_output_items: list[ImpulseOutputItem] = []
 
             batch_images = [item.image_data for item in batch]  # extract once
+            print("Prepared batched images")
             batch_layout = layout_predictor(batch_images)
             batch_ocr = recognition_predictor(batch_images)
 
@@ -972,6 +973,7 @@ class DocumentExtractionTask(FireTaskBase):
                 impulse_output_items,
             )
             handle_txt_format(impulse_output_items)
+            print("Completed a batch")
 
 
         FWAction()
