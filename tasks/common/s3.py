@@ -25,11 +25,12 @@ def download_s3_file(s3_uri: str):
     bucket = parsed_path.netloc
     object_key = parsed_path.path.lstrip('/')
     response = s3.get_object(Bucket=bucket, Key=object_key)
-
+    print("Got object")
     image = Image.open(BytesIO(response['Body'].read()))
     target_dpi = 600
     scale = image.info.get("dpi")[0] / target_dpi
     image = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+    print("Resized object")
     return image
 
 def upload_pil_image_to_s3(
