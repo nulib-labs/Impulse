@@ -37,8 +37,7 @@ tfplan
 crash.log
 crash.*.log
 
-cli
-
+fail
 .env
 
 uv.lock
