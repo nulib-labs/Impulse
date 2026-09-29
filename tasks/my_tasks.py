@@ -646,9 +646,6 @@ class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
 
-    @staticmethod
-
-
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
         """
