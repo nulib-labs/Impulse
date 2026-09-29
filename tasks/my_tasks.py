@@ -1,6 +1,7 @@
 import io
 import json
 from math import floor
+from multiprocessing import Pool
 import queue
 import re
 import threading
@@ -655,7 +656,7 @@ class ImageProcessingTask(FireTaskBase):
             region_name=AWS_REGION,
         )
         s3 = session.client("s3")
-        for path in tqdm(path_array):            
+        def f(path):
             content = s3.get_object(Bucket=S3_BUCKET, Key=path)["Body"].read()
             raw_arr = self._decode(content)
             if raw_arr is None:
@@ -705,6 +706,8 @@ class ImageProcessingTask(FireTaskBase):
                 Body=encoded_bytes,
                 ContentType="image/jp2",
             )
+        with Pool(32) as p:
+            p.map(f, path_array)
 
         return FWAction()
 
