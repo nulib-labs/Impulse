@@ -49,6 +49,248 @@ SENTENCE_SPLIT = re.compile(r"(?<=[a-z0-9]{2}[.!?])\s+(?=[A-Z])")
 
 SENTENCE_FILTER = re.compile(r"[a-zA-Z]{4,}")
 
+session = boto3.Session(profile_name=AWS_PROFILE)
+s3 = session.client("s3")
+
+def _to_grayscale(arr: MatLike) -> MatLike:
+    import cv2
+
+    # cv2.imdecode / imread produce BGR, not RGB — BGR2GRAY is correct here
+    return cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+
+def _is_RGB(arr: MatLike) -> bool:
+    return len(arr.shape) == 3 and arr.shape[2] == 3
+
+def _encode_to_image(arr: MatLike, filetype: str) -> tuple[bytes, str]:
+    import cv2
+    from PIL import Image
+    import io
+
+    if filetype == ".jp2":
+        rgb = (
+            cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+            if len(arr.shape) == 2
+            else cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+        )
+        img = Image.fromarray(rgb)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG2000")
+        return buf.getvalue(), filetype
+
+    success, buffer = cv2.imencode(filetype, arr)
+    if not success:
+        raise RuntimeError(f"cv2.imencode failed for {filetype}")
+    return buffer.tobytes(), filetype
+
+def _decode(content: bytes) -> MatLike | None:
+    """Decode raw image bytes into an OpenCV array.
+
+    Returns None if the bytes could not be decoded.
+    """
+    import cv2
+
+    arr = np.frombuffer(content, np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+
+def _denoise_gray(arr: MatLike) -> MatLike:
+    """Denoise a single-channel grayscale image.
+
+    Uses a small median filter, which is cheap and kills salt-and-
+    pepper scan speckle without blurring stroke edges. We deliberately
+    avoid ``fastNlMeansDenoising`` here: it is dramatically more
+    expensive (seconds per multi-megapixel page) and offers little
+    additional benefit once illumination normalization + Sauvola do
+    the heavy lifting. On a multi-worker pipeline the NLM cost
+    (both CPU and RAM) is the main cause of OOM crashes.
+    """
+    import cv2
+
+    return cv2.medianBlur(arr, 3)
+
+def _normalize_illumination(gray: MatLike) -> MatLike:
+    """Flatten uneven scan lighting / shadows / page-curl gradients.
+
+    Estimates the background via a large morphological close, then
+    divides the input by that background. The result has a near-
+    uniform bright background so downstream local thresholding
+    performs much more consistently.
+
+    The structuring-element size scales with the shorter image
+    dimension so this works across DPIs.
+    """
+    import cv2
+
+    h, w = gray.shape[:2]
+    k = max(15, (min(h, w) // 30) | 1)  # odd, ~3% of short side
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    # cv2.divide handles zero-background pixels safely and clips to uint8.
+    return cv2.divide(gray, background, scale=255)
+
+def _binarize_adaptive(
+    gray: MatLike, k: float = 0.34, R: float = 128.0
+) -> MatLike:
+    """Sauvola adaptive binarization.
+
+    Threshold per pixel is::
+
+        T(x, y) = mean(x, y) * (1 + k * (std(x, y) / R - 1))
+
+    with ``k`` a sensitivity parameter (Sauvola & Pietikäinen 2000
+    recommend ~0.2–0.5; 0.34 is a good default for scanned text)
+    and ``R`` the dynamic range of standard deviation (128 for
+    8-bit imagery).
+
+    Implementation uses OpenCV integral images so per-pixel local
+    mean/std are computed in O(N) regardless of window size.
+
+    The window size scales with the shorter image dimension so the
+    same code works at arbitrary DPI.
+    """
+    import cv2
+
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+
+    h, w = gray.shape[:2]
+    win = max(15, (min(h, w) // 40) | 1)  # odd, ~2.5% of short side
+    r = win // 2
+
+    g = gray.astype(np.float32)
+    # Integral images: shape (h+1, w+1).
+    # S can safely be float32 (max value 255*W*H fits in 24-bit mantissa
+    # for realistic page sizes). S2 must stay float64 — squared pixel
+    # sums grow ~65k× faster and would lose precision in float32 on
+    # high-res scans.
+    S = cv2.integral(g, sdepth=cv2.CV_32F)
+    g2 = g * g
+    S2 = cv2.integral(g2, sdepth=cv2.CV_64F)
+    # Drop the per-pixel intermediates as soon as their integrals exist.
+    del g, g2
+
+    # Pad-index trick: for each pixel (y, x) we want the box
+    # [y-r .. y+r] x [x-r .. x+r], clipped to image bounds.
+    ys = np.arange(h)
+    xs = np.arange(w)
+    y0 = np.clip(ys - r, 0, h)
+    y1 = np.clip(ys + r + 1, 0, h)
+    x0 = np.clip(xs - r, 0, w)
+    x1 = np.clip(xs + r + 1, 0, w)
+
+    # Broadcast to (h, w) index arrays.
+    Y0 = y0[:, None]
+    Y1 = y1[:, None]
+    X0 = x0[None, :]
+    X1 = x1[None, :]
+
+    area = (Y1 - Y0) * (X1 - X0)
+    # Guard against zero-area boxes (shouldn't happen, but be safe).
+    area = np.where(area == 0, 1, area).astype(np.float64)
+
+    sum_ = S[Y1, X1] - S[Y0, X1] - S[Y1, X0] + S[Y0, X0]
+    sum_sq = S2[Y1, X1] - S2[Y0, X1] - S2[Y1, X0] + S2[Y0, X0]
+
+    mean = sum_ / area
+    # Variance clamped to zero to avoid tiny negatives from FP noise.
+    var = np.maximum(sum_sq / area - mean * mean, 0.0)
+    std = np.sqrt(var)
+
+    threshold = mean * (1.0 + k * ((std / R) - 1.0))
+    binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
+    return binary
+
+def _deskew(binary: MatLike) -> MatLike:
+    """Estimate page skew from the binary image and rotate to correct.
+
+    The ``deskew`` package expects ink-as-high, so we pass an
+    inverted copy for angle detection only. Angles outside
+    ``[0.1°, 15°]`` (absolute) are ignored — smaller is noise,
+    larger is almost certainly a bad estimate on a sparse page.
+
+    Rotation is done on the binary itself with cubic interpolation
+    and white border fill so exposed corners match the page
+    background and don't confuse downstream OCR.
+    """
+    import cv2
+    from deskew import determine_skew
+
+    angle = determine_skew(cv2.bitwise_not(binary))
+    if angle is None:
+        return binary
+    if abs(angle) < 0.1 or abs(angle) > 15.0:
+        return binary
+
+    h, w = binary.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+    return cv2.warpAffine(
+        binary,
+        M,
+        (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=255,
+    )
+
+def is_s3_path(path: str) -> bool:
+    """
+    Check if the path is an S3 URI.
+    Supports both s3:// and s3a:// formats.
+    """
+    return bool(re.match(r"^s3a?://", path))
+
+
+def f(path):
+    content = s3.get_object(Bucket=S3_BUCKET, Key=path)["Body"].read()
+    raw_arr = _decode(content)
+    if raw_arr is None:
+        logger.error(
+            f"Failed to decode image at {path}, skipping."
+        )
+        return
+
+    # Pipeline:
+    #   grayscale
+    #       -> denoise
+    #       -> illumination normalization
+    #       -> Sauvola binarization
+    #       -> deskew
+    if raw_arr.ndim == 3:
+        if raw_arr.shape[2] == 4:
+            gray = cv2.cvtColor(
+                raw_arr,
+                cv2.COLOR_BGRA2GRAY,
+            )
+        elif raw_arr.shape[2] == 3:
+            gray = _to_grayscale(raw_arr)
+        else:
+            gray = raw_arr[..., 0]
+    else:
+        gray = raw_arr
+
+    del raw_arr
+
+    gray = _denoise_gray(gray)
+    gray = _normalize_illumination(gray)
+
+    binary: MatLike = _binarize_adaptive(gray)
+    del gray
+
+    binary = _deskew(binary)
+
+    # Encode the processed image as JPEG 2000.
+    encoded_bytes, _ = _encode_to_image(
+        binary,
+        ".jp2",
+    )
+    del binary
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=f"{path.rsplit('.', 1)[0]}.jp2".replace("uploaded_images", "hathitrust_images"),  # adjust to your naming scheme
+        Body=encoded_bytes,
+        ContentType="image/jp2",
+    )
+
+
 @dataclass
 class ImpulseItem:
     """ Class for passing image meta/data to impulse."""
@@ -403,222 +645,9 @@ class EmbeddingTask(FireTaskBase):
 class ImageProcessingTask(FireTaskBase):
     _fw_name = "Image Processing Task"
 
-    @staticmethod
-    def _decode(content: bytes) -> MatLike | None:
-        """Decode raw image bytes into an OpenCV array.
-
-        Returns None if the bytes could not be decoded.
-        """
-        import cv2
-
-        arr = np.frombuffer(content, np.uint8)
-        return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
 
     @staticmethod
-    def _denoise_gray(arr: MatLike) -> MatLike:
-        """Denoise a single-channel grayscale image.
 
-        Uses a small median filter, which is cheap and kills salt-and-
-        pepper scan speckle without blurring stroke edges. We deliberately
-        avoid ``fastNlMeansDenoising`` here: it is dramatically more
-        expensive (seconds per multi-megapixel page) and offers little
-        additional benefit once illumination normalization + Sauvola do
-        the heavy lifting. On a multi-worker pipeline the NLM cost
-        (both CPU and RAM) is the main cause of OOM crashes.
-        """
-        import cv2
-
-        return cv2.medianBlur(arr, 3)
-
-    @staticmethod
-    def _normalize_illumination(gray: MatLike) -> MatLike:
-        """Flatten uneven scan lighting / shadows / page-curl gradients.
-
-        Estimates the background via a large morphological close, then
-        divides the input by that background. The result has a near-
-        uniform bright background so downstream local thresholding
-        performs much more consistently.
-
-        The structuring-element size scales with the shorter image
-        dimension so this works across DPIs.
-        """
-        import cv2
-
-        h, w = gray.shape[:2]
-        k = max(15, (min(h, w) // 30) | 1)  # odd, ~3% of short side
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-        # cv2.divide handles zero-background pixels safely and clips to uint8.
-        return cv2.divide(gray, background, scale=255)
-
-    @staticmethod
-    def _binarize_adaptive(
-        gray: MatLike, k: float = 0.34, R: float = 128.0
-    ) -> MatLike:
-        """Sauvola adaptive binarization.
-
-        Threshold per pixel is::
-
-            T(x, y) = mean(x, y) * (1 + k * (std(x, y) / R - 1))
-
-        with ``k`` a sensitivity parameter (Sauvola & Pietikäinen 2000
-        recommend ~0.2–0.5; 0.34 is a good default for scanned text)
-        and ``R`` the dynamic range of standard deviation (128 for
-        8-bit imagery).
-
-        Implementation uses OpenCV integral images so per-pixel local
-        mean/std are computed in O(N) regardless of window size.
-
-        The window size scales with the shorter image dimension so the
-        same code works at arbitrary DPI.
-        """
-        import cv2
-
-        if gray.ndim == 3:
-            gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
-
-        h, w = gray.shape[:2]
-        win = max(15, (min(h, w) // 40) | 1)  # odd, ~2.5% of short side
-        r = win // 2
-
-        g = gray.astype(np.float32)
-        # Integral images: shape (h+1, w+1).
-        # S can safely be float32 (max value 255*W*H fits in 24-bit mantissa
-        # for realistic page sizes). S2 must stay float64 — squared pixel
-        # sums grow ~65k× faster and would lose precision in float32 on
-        # high-res scans.
-        S = cv2.integral(g, sdepth=cv2.CV_32F)
-        g2 = g * g
-        S2 = cv2.integral(g2, sdepth=cv2.CV_64F)
-        # Drop the per-pixel intermediates as soon as their integrals exist.
-        del g, g2
-
-        # Pad-index trick: for each pixel (y, x) we want the box
-        # [y-r .. y+r] x [x-r .. x+r], clipped to image bounds.
-        ys = np.arange(h)
-        xs = np.arange(w)
-        y0 = np.clip(ys - r, 0, h)
-        y1 = np.clip(ys + r + 1, 0, h)
-        x0 = np.clip(xs - r, 0, w)
-        x1 = np.clip(xs + r + 1, 0, w)
-
-        # Broadcast to (h, w) index arrays.
-        Y0 = y0[:, None]
-        Y1 = y1[:, None]
-        X0 = x0[None, :]
-        X1 = x1[None, :]
-
-        area = (Y1 - Y0) * (X1 - X0)
-        # Guard against zero-area boxes (shouldn't happen, but be safe).
-        area = np.where(area == 0, 1, area).astype(np.float64)
-
-        sum_ = S[Y1, X1] - S[Y0, X1] - S[Y1, X0] + S[Y0, X0]
-        sum_sq = S2[Y1, X1] - S2[Y0, X1] - S2[Y1, X0] + S2[Y0, X0]
-
-        mean = sum_ / area
-        # Variance clamped to zero to avoid tiny negatives from FP noise.
-        var = np.maximum(sum_sq / area - mean * mean, 0.0)
-        std = np.sqrt(var)
-
-        threshold = mean * (1.0 + k * ((std / R) - 1.0))
-        binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
-        return binary
-
-    @staticmethod
-    def _deskew(binary: MatLike) -> MatLike:
-        """Estimate page skew from the binary image and rotate to correct.
-
-        The ``deskew`` package expects ink-as-high, so we pass an
-        inverted copy for angle detection only. Angles outside
-        ``[0.1°, 15°]`` (absolute) are ignored — smaller is noise,
-        larger is almost certainly a bad estimate on a sparse page.
-
-        Rotation is done on the binary itself with cubic interpolation
-        and white border fill so exposed corners match the page
-        background and don't confuse downstream OCR.
-        """
-        import cv2
-        from deskew import determine_skew
-
-        angle = determine_skew(cv2.bitwise_not(binary))
-        if angle is None:
-            return binary
-        if abs(angle) < 0.1 or abs(angle) > 15.0:
-            return binary
-
-        h, w = binary.shape[:2]
-        M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
-        return cv2.warpAffine(
-            binary,
-            M,
-            (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=255,
-        )
-
-    @staticmethod
-    def is_s3_path(path: str) -> bool:
-        """
-        Check if the path is an S3 URI.
-        Supports both s3:// and s3a:// formats.
-        """
-        return bool(re.match(r"^s3a?://", path))
-
-    def save_to_s3(self, s3_path: str, content: bytes) -> bool:
-        """
-        Save binary content to S3.
-
-        Args:
-            s3_path: S3 URI (e.g. s3://bucket/key)
-            content: File content as bytes
-        """
-        logger.debug(f"s3_path: {s3_path}")
-        bucket, key = self.parse_s3_path(s3_path)
-
-        session = boto3.Session(profile_name="impulse")
-        s3_client = session.client("s3")
-
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=content,
-        )
-        logger.success(f"Successfully saved file to s3: {key}")
-        return True
-
-    @staticmethod
-    def _to_grayscale(arr: MatLike) -> MatLike:
-        import cv2
-
-        # cv2.imdecode / imread produce BGR, not RGB — BGR2GRAY is correct here
-        return cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
-
-    @staticmethod
-    def _is_RGB(arr: MatLike) -> bool:
-        return len(arr.shape) == 3 and arr.shape[2] == 3
-
-    @staticmethod
-    def _encode_to_image(arr: MatLike, filetype: str) -> tuple[bytes, str]:
-        import cv2
-        from PIL import Image
-        import io
-
-        if filetype == ".jp2":
-            rgb = (
-                cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
-                if len(arr.shape) == 2
-                else cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
-            )
-            img = Image.fromarray(rgb)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG2000")
-            return buf.getvalue(), filetype
-
-        success, buffer = cv2.imencode(filetype, arr)
-        if not success:
-            raise RuntimeError(f"cv2.imencode failed for {filetype}")
-        return buffer.tobytes(), filetype
 
     @override
     def run_task(self, fw_spec: dict[str, str]) -> FWAction:
@@ -656,56 +685,6 @@ class ImageProcessingTask(FireTaskBase):
             region_name=AWS_REGION,
         )
         s3 = session.client("s3")
-        def f(path):
-            content = s3.get_object(Bucket=S3_BUCKET, Key=path)["Body"].read()
-            raw_arr = self._decode(content)
-            if raw_arr is None:
-                logger.error(
-                    f"Failed to decode image at {path}, skipping."
-                )
-                return
-
-            # Pipeline:
-            #   grayscale
-            #       -> denoise
-            #       -> illumination normalization
-            #       -> Sauvola binarization
-            #       -> deskew
-            if raw_arr.ndim == 3:
-                if raw_arr.shape[2] == 4:
-                    gray = cv2.cvtColor(
-                        raw_arr,
-                        cv2.COLOR_BGRA2GRAY,
-                    )
-                elif raw_arr.shape[2] == 3:
-                    gray = self._to_grayscale(raw_arr)
-                else:
-                    gray = raw_arr[..., 0]
-            else:
-                gray = raw_arr
-
-            del raw_arr
-
-            gray = self._denoise_gray(gray)
-            gray = self._normalize_illumination(gray)
-
-            binary: MatLike = self._binarize_adaptive(gray)
-            del gray
-
-            binary = self._deskew(binary)
-
-            # Encode the processed image as JPEG 2000.
-            encoded_bytes, _ = self._encode_to_image(
-                binary,
-                ".jp2",
-            )
-            del binary
-            s3.put_object(
-                Bucket=S3_BUCKET,
-                Key=f"{path.rsplit('.', 1)[0]}.jp2".replace("uploaded_images", "hathitrust_images"),  # adjust to your naming scheme
-                Body=encoded_bytes,
-                ContentType="image/jp2",
-            )
         with Pool(32) as p:
             p.map(f, path_array)
 
