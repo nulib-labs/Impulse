@@ -927,7 +927,6 @@ class DocumentExtractionTask(FireTaskBase):
 
         def prepare_input_items(i, image_path):
             if s3_key_exists(S3_BUCKET, image_path):
-                print("found s3 item")
                 item = ImpulseInputItem(
                     impulse_identifier=impulse_identifier,
                     page_number=i + 1,
@@ -940,7 +939,7 @@ class DocumentExtractionTask(FireTaskBase):
             impulse_input_items.append(prepare_input_items(i, path))
 
 
-        for batch in batched(impulse_input_items, 64):
+        for batch in batched(impulse_input_items, 128):
                 
             impulse_output_items: list[ImpulseOutputItem] = []
 
