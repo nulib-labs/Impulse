@@ -939,7 +939,7 @@ class DocumentExtractionTask(FireTaskBase):
             impulse_input_items.append(prepare_input_items(i, path))
 
 
-        for batch in batched(impulse_input_items, 128):
+        for batch in batched(impulse_input_items, 32):
                 
             impulse_output_items: list[ImpulseOutputItem] = []
 
