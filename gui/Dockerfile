@@ -11,13 +11,12 @@ ARG APT_PACKAGES="libgl1 libglib2.0-0"
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ${APT_PACKAGES} \
   && rm -rf /var/lib/apt/lists/*
-
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Run as a non-root user.
 RUN useradd --create-home --uid 1000 app
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml .
+RUN uv sync
 
 COPY --chown=app:app . .
 RUN chmod +x /app/docker-entrypoint.sh \
