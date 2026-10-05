@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.aws
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+venv
+launches
+*.log

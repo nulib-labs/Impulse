@@ -935,7 +935,7 @@ wheels = [
 
 [[package]]
 name = "fireworks"
-version = "2.0.9"
+version = "2.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flask" },
@@ -949,9 +949,9 @@ dependencies = [
     { name = "tabulate" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/c4/03cbead1b558e81024845ca1c614d213123aa74ad1e9e42e63d55a2acd3e/fireworks-2.0.9.tar.gz", hash = "sha256:62c57f6fa417e77ca3169784727392fe16b05db0ef33a08b28af0d3d6cc360f5", size = 5027304, upload-time = "2026-03-05T01:00:07.96Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/67/dee143b861dc04419e88a6140f8ae577afd1d664e19e342233cd95bd6361/fireworks-2.1.4.tar.gz", hash = "sha256:277d917b1983a6579c964d0ca5f9b654f7d644b93de609112219b8530c430861", size = 5034248, upload-time = "2026-08-11T16:57:45.641Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/3a/91f78b7f70a2e42fd76435037a324622b0c907b165c1f5e005dd324fee3c/fireworks-2.0.9-py3-none-any.whl", hash = "sha256:760a08e75fe51c4802e5c8dd5645c6125b7889cf6a4d710e426d8e14749f39de", size = 465262, upload-time = "2026-03-05T01:00:05.889Z" },
+    { url = "https://files.pythonhosted.org/packages/86/16/3b8a157462af2d3c28d09e2cbe8a84784264764ec089835bb4f76968e85c/fireworks-2.1.4-py3-none-any.whl", hash = "sha256:3c2c7d6de5d58ea16543d8173b0cca83880ee2501680becccfdadc9d5010f068", size = 468561, upload-time = "2026-08-11T16:57:43.346Z" },
 ]
 
 [[package]]

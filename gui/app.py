@@ -1,13 +1,23 @@
 import os
 import re
+import tempfile
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
-from flask import Flask, abort, redirect, render_template, request, url_for
+from flask import (
+    Flask,
+    abort,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
 from fireworks import Firework, LaunchPad, Workflow
 from natsort import natsorted
 
@@ -119,6 +129,7 @@ def get_job_definition(job_type: str) -> JobDefinition:
 # ---------------------------------------------------------------------------
 #
 #   jobs/<project_id>/<barcode>/uploaded_images/0000000001.png ...
+#   jobs/<project_id>/<barcode>/processed_images/...
 #   jobs/<project_id>/<barcode>/hathitrust/input.xml
 #   jobs/<project_id>/<barcode>/outputs/<job_type>/...   (task outputs)
 #
@@ -321,6 +332,82 @@ def list_job_files(project_id: str, barcode: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Downloadable artifact categories
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ArtifactDefinition:
+    """A category of job files the user can pick for download."""
+
+    label: str
+    prefix: str                              # relative to jobs/<project>/<barcode>/
+    suffixes: tuple[str, ...] = ()           # empty = every file under prefix
+    exclude_prefixes: tuple[str, ...] = ()   # relative to the job prefix
+
+
+ARTIFACT_DEFINITIONS: dict[str, ArtifactDefinition] = {
+    "uploaded_images": ArtifactDefinition(
+        label="Uploaded images",
+        prefix="uploaded_images/",
+    ),
+    "processed_images": ArtifactDefinition(
+        label="Processed images",
+        prefix="processed_images/",
+    ),
+    "txt": ArtifactDefinition(
+        label="Text files (.txt)",
+        prefix="outputs/",
+        suffixes=(".txt",),
+    ),
+    "json": ArtifactDefinition(
+        label="JSON files (.json)",
+        prefix="outputs/",
+        suffixes=(".json",),
+        # The HathiTrust manifest may be JSON; it has its own categories.
+        exclude_prefixes=("outputs/hathitrust/",),
+    ),
+    "hathitrust_xml": ArtifactDefinition(
+        label="HathiTrust XML manifest",
+        prefix="outputs/hathitrust/",
+        suffixes=(".xml",),
+    ),
+    "hathitrust_yaml": ArtifactDefinition(
+        label="HathiTrust YAML manifest",
+        prefix="outputs/hathitrust/",
+        suffixes=(".yaml", ".yml"),
+    ),
+    "hathitrust_zip": ArtifactDefinition(
+        label="Zipped HathiTrust manifest",
+        prefix="outputs/hathitrust/",
+        suffixes=(".zip",),
+    ),
+}
+
+
+def collect_artifact_keys(
+    project_id: str, barcode: str, artifact_types: list[str]
+) -> list[str]:
+    """Return the de-duplicated, sorted S3 keys for the selected artifact types."""
+
+    base = f"{job_prefix(project_id, barcode)}/"
+    found: set[str] = set()
+
+    for artifact_type in artifact_types:
+        definition = ARTIFACT_DEFINITIONS[artifact_type]
+        for key in list_job_keys(project_id, barcode, prefix=base + definition.prefix):
+            relative = key[len(base):]
+            if relative.endswith("/"):  # S3 "folder" placeholder objects
+                continue
+            if definition.suffixes and not relative.lower().endswith(definition.suffixes):
+                continue
+            if any(relative.startswith(p) for p in definition.exclude_prefixes):
+                continue
+            found.add(key)
+
+    return natsorted(found)
+
+
+# ---------------------------------------------------------------------------
 # FireWorks spec construction
 # ---------------------------------------------------------------------------
 
@@ -382,11 +469,11 @@ def submit_fireworks_jobs(
     """
     Insert ONE workflow containing one Firework per selected job type.
 
-    No links are defined between the Fireworks, so they are all READY at
-    once and run in parallel (given enough workers -- e.g. multiple
-    `rlaunch` processes or a queue adapter).
+    Jobs are independent (and run in parallel given enough workers, e.g.
+    multiple `rlaunch` processes or a queue adapter), except that HathiTrust
+    waits for every other selected job to finish.
 
-    Returns {job_type: fw_id}.
+    Returns the id map from add_wf.
     """
 
     fireworks = {}
@@ -398,7 +485,7 @@ def submit_fireworks_jobs(
             name=f"job-{impulse_identifier}-{job_type}",
         )
 
-# HathiTrust runs only after every other job has completed
+    # HathiTrust runs only after every other job has completed
     links = {}
     hathitrust_fw = next(
         (
@@ -452,7 +539,15 @@ def find_fireworks_for_job(impulse_identifier: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def render_index(error: str | None = None, status: int = 200):
-    return render_template("index.html", jobs=JOB_DEFINITIONS, error=error), status
+    return (
+        render_template(
+            "index.html",
+            jobs=JOB_DEFINITIONS,
+            artifacts=ARTIFACT_DEFINITIONS,
+            error=error,
+        ),
+        status,
+    )
 
 
 def render_job(project_id: str, barcode: str, status: int = 200, **context):
@@ -470,6 +565,7 @@ def render_job(project_id: str, barcode: str, status: int = 200, **context):
             hathitrust_manifest_available=s3_key_exists(
                 hathitrust_manifest_key(project_id, barcode)
             ),
+            artifacts=ARTIFACT_DEFINITIONS,
             **context,
         ),
         status,
@@ -593,7 +689,7 @@ def start_job(project_id: str, barcode: str):
         app.logger.exception("Failed to submit FireWorks jobs %s", impulse_identifier)
         return render_job(project_id, barcode, 500, error=f"Failed to submit job: {exc}")
 
-    labels = ", ".join(JOB_DEFINITIONS[jt].label for jt in fw_ids)
+    labels = ", ".join(JOB_DEFINITIONS[jt].label for jt in job_types)
     return render_job(
         project_id,
         barcode,
@@ -637,6 +733,48 @@ def download_hathitrust_manifest(project_id: str, barcode: str):
     #   obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
     #   return Response(obj["Body"].iter_chunks(), mimetype=..., headers=...)
     return redirect(url)
+
+
+@app.route("/download", methods=["POST"])
+def download_artifacts():
+    """Zip the selected artifact categories for a job and send them."""
+
+    project_id = request.form.get("project_id", "").strip()
+    barcode = request.form.get("barcode", "").strip()
+
+    try:
+        validate_ids(project_id, barcode)
+    except ValueError as exc:
+        return render_index(str(exc), 400)
+
+    selected = [
+        a for a in request.form.getlist("artifact") if a in ARTIFACT_DEFINITIONS
+    ]
+    if not selected:
+        return render_index("Please select at least one artifact to download.", 400)
+
+    keys = collect_artifact_keys(project_id, barcode, selected)
+    if not keys:
+        return render_index("No matching files found for that job.", 404)
+
+    base = f"{job_prefix(project_id, barcode)}/"
+
+    # Spools to disk past 100 MB so big image sets don't sit in RAM.
+    tmp = tempfile.SpooledTemporaryFile(max_size=100 * 1024 * 1024)
+    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for key in keys:
+            # Mirrors the S3 layout inside the zip, so categories sharing a
+            # prefix (txt/json under outputs/) never collide.
+            with zf.open(key[len(base):], "w", force_zip64=True) as dest:
+                s3.download_fileobj(S3_BUCKET, key, dest)
+    tmp.seek(0)
+
+    return send_file(
+        tmp,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project_id}_{barcode}_artifacts.zip",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -61,6 +61,16 @@
       font-size: 1em;
       cursor: pointer;
     }
+
+    .artifact-grid label {
+      display: block;
+      margin: 6px 0;
+      cursor: pointer;
+    }
+
+    hr.section-break {
+      margin: 40px 0;
+    }
   </style>
 
 </head>
@@ -154,6 +164,48 @@
 
   </form>
 
+  <hr class="section-break">
+
+  <h2>Download Job Artifacts</h2>
+
+  <form method="post" action="{{ url_for('download_artifacts') }}">
+
+    <div class="field">
+      <h3>1. Impulse identifier</h3>
+
+      <input type="text" name="project_id" placeholder="e.g. p1234" required>
+      <input type="text" name="barcode" placeholder="e.g. 355512345678" required>
+    </div>
+
+    <div class="field">
+      <h3>2. Choose any combination</h3>
+
+      <p>
+        <button type="button" id="artifacts-all">Select all</button>
+        <button type="button" id="artifacts-none">Clear</button>
+      </p>
+
+      <div class="artifact-grid">
+        {% for key, artifact in artifacts.items() %}
+        <label>
+          <input type="checkbox" name="artifact" value="{{ key }}">
+          {{ artifact.label }}
+        </label>
+        {% endfor %}
+      </div>
+
+      <p class="description">
+        Selected files are bundled into a single zip that keeps the job's
+        folder layout.
+      </p>
+    </div>
+
+    <div class="field">
+      <button type="submit">Download zip</button>
+    </div>
+
+  </form>
+
   <script>
     const jobInputs = document.querySelectorAll('input[name="job_type"]');
 
@@ -205,6 +257,13 @@
     jobInputs.forEach((input) => input.addEventListener("change", updateForm));
 
     updateForm();
+
+    // Artifact download: select all / clear
+    const artifactBoxes = document.querySelectorAll('input[name="artifact"]');
+    document.getElementById("artifacts-all").addEventListener("click", () =>
+      artifactBoxes.forEach((b) => (b.checked = true)));
+    document.getElementById("artifacts-none").addEventListener("click", () =>
+      artifactBoxes.forEach((b) => (b.checked = false)));
   </script>
 
 </body>

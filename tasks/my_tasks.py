@@ -912,7 +912,6 @@ class DocumentExtractionTask(FireTaskBase):
                     payload = "\n".join(payload)
                 
                     key =item.source_path.split(".")[0] + ".txt" 
-                    logger.debug(key)
                     s3.put_object(
                     Bucket=S3_BUCKET,
                     Key=key.replace("uploaded_images", "txt"),

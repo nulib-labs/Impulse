@@ -1,0 +1,51 @@
+name: impulse
+
+# Environment shared by the web UI and the workers.
+x-app-env: &app-env
+  MONGO_URI: mongodb://mongo:27017
+  S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
+  AWS_REGION: ${AWS_REGION:?Set AWS_REGION in .env}
+  AWS_PROFILE: ${AWS_PROFILE:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  HATHITRUST_MANIFEST_NAME: ${HATHITRUST_MANIFEST_NAME:-manifest.json}
+  MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-524288000}
+
+x-app-build: &app-build
+  context: .
+  args:
+    APT_PACKAGES: ${APT_PACKAGES:-libgl1 libglib2.0-0}
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  web:
+    build: *app-build
+    image: impulse-app:latest
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment: *app-env
+    ports:
+      # Bound to localhost by default. Set BIND_ADDR=0.0.0.0 to expose it on
+      # the local network.
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-5000}:5000"
+    volumes:
+      # Only used when AWS_PROFILE is set (SSO / named profiles).
+      - ${AWS_CONFIG_DIR:-./.aws}:/home/app/.aws:ro
+
+volumes:
+  mongo_data:
