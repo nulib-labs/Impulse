@@ -6,7 +6,6 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 import boto3
 from botocore.exceptions import ClientError
 from flask import (
@@ -22,7 +21,6 @@ from fireworks import Firework, LaunchPad, Workflow
 from natsort import natsorted
 
 import tasks
-
 
 app = Flask(__name__)
 
@@ -356,24 +354,24 @@ ARTIFACT_DEFINITIONS: dict[str, ArtifactDefinition] = {
     ),
     "txt": ArtifactDefinition(
         label="Text files (.txt)",
-        prefix="outputs/",
+        prefix="txt/",
         suffixes=(".txt",),
     ),
     "json": ArtifactDefinition(
         label="JSON files (.json)",
-        prefix="outputs/",
+        prefix="json/",
         suffixes=(".json",),
         # The HathiTrust manifest may be JSON; it has its own categories.
         exclude_prefixes=("outputs/hathitrust/",),
     ),
     "hathitrust_xml": ArtifactDefinition(
         label="HathiTrust XML manifest",
-        prefix="outputs/hathitrust/",
+        prefix="",
         suffixes=(".xml",),
     ),
     "hathitrust_yaml": ArtifactDefinition(
         label="HathiTrust YAML manifest",
-        prefix="outputs/hathitrust/",
+        prefix="",
         suffixes=(".yaml", ".yml"),
     ),
     "hathitrust_zip": ArtifactDefinition(
