@@ -9,7 +9,7 @@ You can use that manifest with `uv run lpad add ./tests/impulse_manifest/manifes
 
 ![Impulse Logo](logo.png)
 
-Impulse is an easy-to-deploy all-in-one solution for extremely high-throuput
+Impulse is an easy-to-deploy all-in-one solution for extremely high-throughput
 embarrassingly parallel data extraction built for digitization, indexing,
 and distribution through IIIF manifests.
 
