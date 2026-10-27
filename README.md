@@ -17,8 +17,6 @@ Running on Northwestern University's Quest supercomputing cluster, we observed
 hundreds of pages per hour. (This is while limiting ourselves to 50 concurrent
 jobs!) This could easily hit thousands of pages per hour.
 
-![Flex](flex.png)
-
 This code is very easily extensible to new models/paradigms. Just edit the
 `impulse.tasks.DocumentExtraction` class!
 
