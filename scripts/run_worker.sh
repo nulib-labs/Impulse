@@ -28,8 +28,16 @@ export FW_CONFIG_FILE="${REPO_ROOT}/FW_config.yaml"
 # spawn its own. Must be the OpenAI-compatible base (ends in /v1); Surya derives
 # the /health probe by stripping /v1. AUTOSTART=False makes an unreachable URL
 # fail fast with a clear error instead of trying to spawn a container.
-export SURYA_INFERENCE_URL="http://127.0.0.1:8000/v1"
+export SURYA_INFERENCE_URL="${SURYA_INFERENCE_URL:-http://127.0.0.1:8000/v1}"
 export SURYA_INFERENCE_AUTOSTART=False
+
+# DocumentExtractionTask drives vLLM through tasks/common/surya_async.py
+# (AsyncOpenAI). SURYA_ASYNC_CONCURRENCY caps in-flight requests from this
+# worker; keep (workers x concurrency) <= VLLM_MAX_NUM_SEQS in
+# scripts/run_vllm_spark.sh (256). SURYA_PAGE_WORKERS caps pages decoded in
+# memory at once (each page issues a layout and an OCR request).
+export SURYA_ASYNC_CONCURRENCY="${SURYA_ASYNC_CONCURRENCY:-128}"
+export SURYA_PAGE_WORKERS="${SURYA_PAGE_WORKERS:-64}"
 
 # Activate the local venv if present.
 if [ -f "${REPO_ROOT}/.venv/bin/activate" ]; then

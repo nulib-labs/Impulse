@@ -849,27 +849,26 @@ class DocumentExtractionTask(FireTaskBase):
 
     @override
     def run_task(self, fw_spec: dict[str, list[str]]) -> FWAction:
-        """Run batched OCR extraction via vLLM with prefetched batches.
+        """Run OCR extraction via vLLM, streaming pages through a worker pool.
 
-        A background producer thread downloads and decodes the *next*
-        batch from S3 while the main thread runs vLLM inference on the
-        *current* batch.  This keeps the GPU busy instead of idling
-        during S3 downloads and image decoding.
-
-        The producer pushes ``(batch_input_items, item_meta)`` tuples
-        onto a bounded queue (``maxsize=1``, i.e. at most one batch
-        ahead).  The main thread pulls from the queue, runs inference,
-        and persists results to MongoDB.
+        Each page is downloaded, sent to vLLM (layout and full-page OCR
+        concurrently), and saved to S3 independently, so there is no
+        per-batch barrier waiting on the slowest page. All requests share
+        one AsyncOpenAI client (``tasks.common.surya_async``) whose
+        in-flight limit is ``SURYA_ASYNC_CONCURRENCY``; ``SURYA_PAGE_WORKERS``
+        bounds how many decoded pages are held in memory at once.
         """
         from bs4 import BeautifulSoup
-        from surya.inference import SuryaInferenceManager
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from surya.recognition import RecognitionPredictor
         from surya.layout import LayoutPredictor
-        from itertools import batched
-        from tasks.common.s3 import download_s3_file        
-        from urllib.parse import urlparse
-        
-        manager = SuryaInferenceManager()
+        from tasks.common.s3 import download_s3_file
+        from tasks.common.surya_async import make_async_manager
+
+        page_workers = int(os.environ.get("SURYA_PAGE_WORKERS", "64"))
+
+        manager = make_async_manager()
+        manager.start()  # fail fast if the vLLM server is down
         recognition_predictor = RecognitionPredictor(manager)
         layout_predictor = LayoutPredictor(manager)
         find_path_array_in: str = fw_spec["find_path_array_in"]
@@ -886,9 +885,7 @@ class DocumentExtractionTask(FireTaskBase):
 
         logger.debug(f"Value of `path_array`:{path_array}")
         logger.debug(f"Type of `path_array`:{type(path_array)}")
-        
-        impulse_input_items: list[ImpulseInputItem] = []
-        
+
         def handle_txt_format(items: list[ImpulseOutputItem]):
             for item in items:
                 try:
@@ -934,48 +931,50 @@ class DocumentExtractionTask(FireTaskBase):
                 )
                 return item
 
-        for i, path in enumerate(natsorted(path_array)):
-            impulse_input_items.append(prepare_input_items(i, path))
+        def process_page(i, image_path, layout_pool):
+            item = prepare_input_items(i, image_path)
+            if item is None:
+                logger.warning(f"Skipping missing S3 key: {image_path}")
+                return
 
+            # Layout and full-page OCR are independent requests; run them together.
+            layout_future = layout_pool.submit(layout_predictor, [item.image_data])
+            ocr = recognition_predictor([item.image_data])[0]
+            layout = layout_future.result()[0]
 
-        for batch in batched(impulse_input_items, 32):
-                
-            impulse_output_items: list[ImpulseOutputItem] = []
+            save_path = item.source_path.split(".")[0] + ".json"
+            save_path = save_path.replace("uploaded_images", "json")
 
-            batch_images = [item.image_data for item in batch]  # extract once
-            print("Prepared batched images")
-            batch_layout = layout_predictor(batch_images)
-            batch_ocr = recognition_predictor(batch_images)
-
-            for item, layout, ocr in zip(impulse_input_items, batch_layout, batch_ocr):
-                path_parts = item.source_path.split(".")
-                save_path = path_parts[0] + ".json"
-                save_path = save_path.replace("uploaded_images", "json")
-
-
-
-                impulse_output_items.append(
-                    ImpulseOutputItem(
-                        image_data = item.image_data,
-                        source_path = item.source_path,
-                        impulse_identifier=item.impulse_identifier,
-                        page_number=item.page_number,
-                        layout_data=layout.model_dump(),
-                        ocr_data=ocr.model_dump(),
-                        data_save_path = save_path
-                    )
+            output_items = [
+                ImpulseOutputItem(
+                    image_data=item.image_data,
+                    source_path=item.source_path,
+                    impulse_identifier=item.impulse_identifier,
+                    page_number=item.page_number,
+                    layout_data=layout.model_dump(),
+                    ocr_data=ocr.model_dump(),
+                    data_save_path=save_path,
                 )
+            ]
+            self.save_to_s3(output_items)
+            handle_txt_format(output_items)
 
+        try:
+            with (
+                ThreadPoolExecutor(page_workers) as page_pool,
+                ThreadPoolExecutor(page_workers) as layout_pool,
+            ):
+                futures = [
+                    page_pool.submit(process_page, i, path, layout_pool)
+                    for i, path in enumerate(path_array)
+                ]
+                for done, future in enumerate(as_completed(futures), start=1):
+                    future.result()
+                    logger.info(f"Completed page {done}/{len(futures)}")
+        finally:
+            manager.stop()
 
-            contents: list[dict] = [asdict(output_item_dict) for output_item_dict in impulse_output_items]
-            self.save_to_s3(
-                impulse_output_items,
-            )
-            handle_txt_format(impulse_output_items)
-            print("Completed a batch")
-
-
-        FWAction()
+        return FWAction()
 
 class CreateHathiTrustManifest(FireTaskBase):
     _fw_name = "Create HathiTrust Manifest"
